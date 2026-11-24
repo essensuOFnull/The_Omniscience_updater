@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Omniscience Updater</title>
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <div>
+          <p class="eyebrow">THE_OMNISCIENCE</p>
+          <h1>Подготовка Windows</h1>
+          <p class="subtitle">Установка локальных пакетов из включённых фрагментов</p>
+        </div>
+        <span id="status" class="status" data-state="idle">Готово</span>
+      </header>
+
+      <section class="actions" aria-label="Установка компонентов">
+        <article class="action-card">
+          <div class="action-copy">
+            <h2>App Installer и winget</h2>
+            <p>Установить локальный пакет App Installer и его зависимости.</p>
+          </div>
+          <button type="button" data-action="winget">Установить winget</button>
+        </article>
+        <article class="action-card">
+          <div class="action-copy">
+            <h2>Microsoft Store</h2>
+            <p>Установить Store и необходимые AppX-зависимости из локальных файлов.</p>
+          </div>
+          <button type="button" data-action="store">Установить Microsoft Store</button>
+        </article>
+      </section>
+
+      <section class="log-section" aria-label="Ход установки">
+        <div class="log-heading">
+          <h2>Журнал установки</h2>
+          <span id="log-hint">Выберите действие выше</span>
+        </div>
+        <pre id="log" role="log" aria-live="polite">Операции ничего не загружают из сети. Установка запускается только после нажатия кнопки.</pre>
+      </section>
+      <p class="notice">Не закрывайте приложение до завершения операции. Ввод команд отключён.</p>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

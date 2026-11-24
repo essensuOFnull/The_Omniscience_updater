@@ -1,0 +1,23 @@
+{
+  "name": "the-omniscience-updater",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 22869 --strictPort",
+    "build": "vite build",
+    "stage:resources": "node scripts/stage-tauri-resources.mjs",
+    "check:resources": "node scripts/stage-tauri-resources.mjs --check",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@lydell/node-pty": "1.2.0-beta.18",
+    "@tauri-apps/api": "^2.9.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.5",
+    "vite": "^8.0.16"
+  }
+}

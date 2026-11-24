@@ -1,0 +1,18 @@
+[package]
+name = "omniscience-updater"
+version = "0.1.0"
+description = "The Omniscience updater and environment bootstrapper"
+authors = ["EssenceOfDream"]
+edition = "2024"
+
+[lib]
+name = "omniscience_updater_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }

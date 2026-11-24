@@ -1,0 +1,6 @@
+{
+  "name": "fragmenter",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Splits and joins files for GitHub"
+}

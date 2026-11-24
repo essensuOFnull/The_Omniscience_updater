@@ -1,0 +1,179 @@
+:root {
+  font-family: "Segoe UI", sans-serif;
+  color: #e8ebf2;
+  background: #10131a;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 680px;
+  min-height: 100vh;
+  margin: 0;
+  background:
+    radial-gradient(ellipse at 10% 0%, #27233d 0, transparent 48%),
+    #10131a;
+}
+
+.app {
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+  gap: 24px;
+  padding: 32px;
+}
+
+.header,
+.action-card,
+.log-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.header {
+  align-items: flex-start;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: #a99cf8;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 7px;
+  font-size: 25px;
+}
+
+h2 {
+  margin-bottom: 6px;
+  font-size: 15px;
+}
+
+.subtitle,
+.action-copy p,
+.notice,
+#log-hint {
+  color: #9ca5b5;
+  font-size: 13px;
+}
+
+.subtitle {
+  margin-bottom: 0;
+}
+
+.status {
+  flex: 0 0 auto;
+  border: 1px solid #343b4b;
+  border-radius: 999px;
+  padding: 8px 12px;
+  color: #c9d2e0;
+  font-size: 12px;
+}
+
+.status[data-state="busy"] {
+  border-color: #7866da;
+  color: #c5baff;
+}
+
+.status[data-state="error"] {
+  border-color: #a84654;
+  color: #ff9aa7;
+}
+
+.actions {
+  display: grid;
+  gap: 12px;
+}
+
+.action-card {
+  min-height: 92px;
+  border: 1px solid #2b3140;
+  border-radius: 12px;
+  padding: 18px;
+  background: rgb(25 29 39 / 86%);
+}
+
+.action-copy p {
+  margin-bottom: 0;
+}
+
+button {
+  flex: 0 0 auto;
+  min-width: 188px;
+  border: 0;
+  border-radius: 8px;
+  padding: 11px 15px;
+  color: #fff;
+  background: #6959d2;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: #7a6be0;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.log-section {
+  display: flex;
+  min-height: 250px;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #2b3140;
+  border-radius: 12px;
+  background: #0a0c11;
+}
+
+.log-heading {
+  min-height: 46px;
+  border-bottom: 1px solid #252a35;
+  padding: 0 15px;
+}
+
+.log-heading h2 {
+  margin: 0;
+}
+
+#log-hint {
+  text-align: right;
+}
+
+#log {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 15px;
+  color: #c5d0df;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.notice {
+  margin: -12px 0 0;
+  text-align: right;
+}

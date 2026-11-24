@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Omniscience Updater",
+  "version": "0.1.0",
+  "identifier": "com.essenceofdream.omniscience-updater",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:22869",
+    "beforeBuildCommand": "npm run build && npm run stage:resources",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Omniscience Updater",
+        "width": 820,
+        "height": 700,
+        "minWidth": 700,
+        "minHeight": 580,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null,
+      "capabilities": ["default"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "resources": ["resources/generated/updater/**/*"]
+  }
+}
