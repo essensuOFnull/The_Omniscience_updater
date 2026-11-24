@@ -176,6 +176,13 @@ document.querySelector('#open-github').addEventListener('click', async () => {
     appendOutput(`\nНе удалось открыть браузер: ${String(error)}\n`);
   }
 });
+document.querySelector('#open-github-devtools').addEventListener('click', async () => {
+  try {
+    await invoke('open_github_devtools');
+  } catch (error) {
+    appendOutput(`\nНе удалось открыть DevTools: ${String(error)}\n`);
+  }
+});
 
 document.querySelector('#prepare-release').addEventListener('click', async () => {
   const tag = document.querySelector('#release-tag').value.trim();

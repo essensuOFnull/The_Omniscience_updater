@@ -182,88 +182,81 @@ fn run_capture(program: &Path, args: &[&str], current_dir: Option<&Path>) -> Res
 fn github_injection_script() -> String {
     r#"
 (() => {
-  const injected = 'omniscience-release-install';
   const invoke = (...args) => window.__TAURI_INTERNALS__?.invoke(...args);
 
   function repoInfo() {
     const parts = location.pathname.split('/').filter(Boolean);
     if (parts.length < 2) return null;
-    const owner = parts[0];
-    const repo = parts[1];
-    const tagIndex = parts.indexOf('tag');
-    const tag = tagIndex >= 0 ? parts.slice(tagIndex + 1).join('/') : '';
-    return { owner, repo, tag };
+    return { owner: parts[0], repo: parts[1] };
   }
 
-  function addButton(link, label, mode) {
-    if (!link || link.dataset[injected]) return;
-    link.dataset[injected] = '1';
+  function findTag(link) {
+    const downloadMatch = link.href.match(/\/releases\/download\/([^/?#]+)\//i);
+    if (downloadMatch) return decodeURIComponent(downloadMatch[1]);
+    const archiveMatch = link.href.match(/\/archive\/(?:refs\/tags\/|[^/]*\/)([^/?#]+)\.(?:zip|tar\.gz)/i);
+    if (archiveMatch) return decodeURIComponent(archiveMatch[1].replace(/\.zip$|\.tar\.gz$/i, ''));
+
+    let element = link;
+    for (let depth = 0; element && depth < 8; depth++, element = element.parentElement) {
+      const tagLink = element.querySelector?.('a[href*="/releases/tag/"]');
+      const match = tagLink?.getAttribute('href')?.match(/\/releases\/tag\/([^/?#]+)$/i);
+      if (match) return decodeURIComponent(match[1]);
+    }
+    return null;
+  }
+
+  function addButton(link, mode) {
+    if (link.dataset.omniscienceProcessed) return;
+    link.dataset.omniscienceProcessed = '1';
     const info = repoInfo();
-    if (!info) return;
+    const tag = findTag(link);
+    if (!info || !tag) return;
 
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = label;
+    button.textContent = mode === 'prod' ? 'Установить как Prod' : 'Установить как Dev';
     button.style.cssText = 'margin-left:10px;padding:5px 8px;border:1px solid #6e7681;border-radius:6px;background:#238636;color:#fff;font-size:12px;cursor:pointer;';
     button.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (!info.tag) {
-        alert('Не удалось определить тег релиза. Откройте конкретную страницу релиза.');
-        return;
-      }
-      if (mode === 'prod') {
-        invoke('install_github_artifact', {
-          owner: info.owner,
-          repo: info.repo,
-          tag: info.tag,
-          mode,
-          assetUrl: new URL(link.href, location.href).href,
-          assetName: decodeURIComponent(link.pathname.split('/').pop() || 'Omniscience.exe')
-        }).catch((error) => alert('Ошибка установки: ' + error));
-      } else {
-        invoke('install_github_artifact', {
-          owner: info.owner,
-          repo: info.repo,
-          tag: info.tag,
-          mode,
-          assetUrl: 'https://github.com/' + info.owner + '/' + info.repo,
-          assetName: 'source'
-        }).catch((error) => alert('Ошибка установки: ' + error));
-      }
+      invoke('install_github_artifact', {
+        owner: info.owner,
+        repo: info.repo,
+        tag,
+        mode,
+        assetUrl: mode === 'prod'
+          ? new URL(link.href, location.href).href
+          : 'https://github.com/' + info.owner + '/' + info.repo,
+        assetName: mode === 'prod'
+          ? decodeURIComponent(link.pathname.split('/').pop() || 'Omniscience.exe')
+          : 'source'
+      }).catch((error) => alert('Ошибка установки: ' + error));
     });
-
-    const container = link.parentElement;
-    if (container && !container.querySelector('[data-omniscience-button="' + mode + '"]')) {
-      button.dataset.omniscienceButton = mode;
-      link.insertAdjacentElement('afterend', button);
-    }
+    link.insertAdjacentElement('afterend', button);
   }
 
   function decorate() {
     if (!location.hostname.endsWith('github.com')) return;
     for (const link of document.querySelectorAll('a[href]')) {
       const href = link.getAttribute('href') || '';
-      const text = (link.textContent || '').trim().toLowerCase();
-      if (/\/releases\/download\/[^/?#]+\/[^/?#]+\.exe(?:$|[?#])/i.test(href) ||
-          href.toLowerCase().endsWith('.exe')) {
-        addButton(link, 'Установить как Prod', 'prod');
+      const text = (link.textContent || '').trim();
+      if (/\/releases\/download\/[^/?#]+\/[^/?#]+\.exe(?:$|[?#])/i.test(href)
+          || href.toLowerCase().endsWith('.exe')) {
+        addButton(link, 'prod');
       }
-      if (href.includes('/archive/refs/tags/') ||
-          href.includes('/archive/') && (text.includes('source code') || text.includes('zip'))) {
-        addButton(link, 'Установить как Dev', 'dev');
-      }
-      if (/source code\s*\(zip\)/i.test(link.textContent || '') ||
-          /source code\s*\(tar\.gz\)/i.test(link.textContent || '') ||
-          text.includes('source code')) {
-        addButton(link, 'Установить как Dev', 'dev');
+      if (/source code\s*\((?:zip|tar\.gz)\)/i.test(text)
+          || /\/archive\/(?:refs\/tags\/|[^/]+\/)/i.test(href)
+          && /zip|tar\.gz/i.test(href)) {
+        addButton(link, 'dev');
       }
     }
   }
 
-  const observer = new MutationObserver(decorate);
-  observer.observe(document.documentElement, { childList: true, subtree: true });
   decorate();
+  const observer = new MutationObserver(decorate);
+  if (document.documentElement) {
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  }
 })();
 "#.to_string()
 }
@@ -292,6 +285,8 @@ fn open_github_browser(app: AppHandle, url: String) -> Result<String, String> {
     if let Some(window) = app.get_webview_window("github-browser") {
         window.navigate(parsed).map_err(|error| format!("Не удалось перейти по адресу: {error}"))?;
         window.set_focus().map_err(|error| format!("Не удалось открыть окно: {error}"))?;
+        let script = github_injection_script();
+        let _ = window.eval(script);
     } else {
         WebviewWindowBuilder::new(
             &app,
@@ -301,7 +296,14 @@ fn open_github_browser(app: AppHandle, url: String) -> Result<String, String> {
         .title("Omniscience — GitHub")
         .inner_size(1180.0, 820.0)
         .resizable(true)
-        .initialization_script(&github_injection_script())
+        .visible(true)
+        .devtools(true)
+        .on_page_load(|window, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                let script = github_injection_script();
+                let _ = window.eval(script);
+            }
+        })
         .build()
         .map_err(|error| format!("Не удалось открыть встроенный браузер: {error}"))?;
     }
@@ -311,6 +313,15 @@ fn open_github_browser(app: AppHandle, url: String) -> Result<String, String> {
 #[tauri::command]
 fn navigate_github_browser(app: AppHandle, url: String) -> Result<String, String> {
     open_github_browser(app, url)
+}
+
+#[tauri::command]
+fn open_github_devtools(app: AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("github-browser")
+        .ok_or_else(|| "Окно GitHub ещё не открыто.".to_string())?;
+    window.open_devtools();
+    Ok(())
 }
 
 #[tauri::command]
@@ -774,8 +785,42 @@ pub fn run() {
             launch_omniscience,
             open_github_browser,
             navigate_github_browser,
+            open_github_devtools,
             install_github_artifact
         ])
+        .setup(|app| {
+            let state = load_state(app.handle());
+            let url = if state.browser_url.trim().is_empty() {
+                "https://github.com/EssenceOfDream/The_Omniscience/releases".to_string()
+            } else {
+                state.browser_url
+            };
+
+            if let Ok(parsed) = Url::parse(&url) {
+                if parsed.scheme() == "https"
+                    && matches!(parsed.host_str(), Some("github.com") | Some("www.github.com"))
+                {
+                    let _window = WebviewWindowBuilder::new(
+                        app.handle(),
+                        "github-browser",
+                        WebviewUrl::External(parsed),
+                    )
+                    .title("Omniscience — GitHub")
+                    .inner_size(1180.0, 820.0)
+                    .resizable(true)
+                    .visible(true)
+                    .devtools(true)
+                    .on_page_load(|window, payload| {
+                        if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                            let script = github_injection_script();
+                            let _ = window.eval(script);
+                        }
+                    })
+                    .build();
+                }
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running Omniscience Updater");
 }
