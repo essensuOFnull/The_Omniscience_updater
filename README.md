@@ -14,6 +14,13 @@
 
 ## Что сейчас есть
 
+- Панель режима Dev/Prod с сохранением настроек в локальном состоянии приложения.
+- Проверка prerequisites через существующий PowerShell-сценарий и показ JSON-результата в UI.
+- Проверка последнего stable release через GitHub Releases API.
+- Безопасная подготовка конкретного release tag: clone в новый checkout или checkout в уже установленном чистом рабочем дереве.
+- Запуск Omniscience в Dev или через настроенный production EXE.
+- Встроенное GitHub-окно с адресной строкой и автоматическими кнопками установки `.exe` как Prod и исходного кода как Dev.
+- Выбор буквы диска для установки по пути `${диск}:\The_Omniscience\${owner}\${repository}\${tag}\${prod|dev}`.
 - `fragmenter/` — побайтовая копия каталога из коммита `fe21ab57e70d3d5ffa89953722236944b5548e2e` основного репозитория.
 - `scripts/Restore-Payload.ps1` — восстановление бинарных фрагментов до установки Node.js.
 - `scripts/Test-Prerequisites.ps1` — read-only проверка доступности Git, Node.js/npm, Rust/Cargo, Python, MSVC Build Tools и App Installer/winget.
@@ -68,8 +75,7 @@ npm run tauri:build
 
 1. Проверить реальные установки на чистых VM Windows 10/11 x64 и документировать ограничения Store/App Installer.
 2. Зафиксировать поддерживаемые версии Windows, Node.js, Rust и MSVC Build Tools.
-3. Реализовать получение конкретного стабильного release tag и создание безопасного checkout.
-4. Добавить Prod/Dev режимы и безопасное обновление исходников.
-5. Реализовать production-сборку с rollback после проверки текущего Tauri build pipeline.
+3. Провести UI-проверку сохранения состояния и подготовки release на реальном рабочем checkout.
+4. Реализовать production-сборку с rollback после проверки текущего Tauri build pipeline.
 
 Это первый UI-прототип установочных операций, не готовый updater.
