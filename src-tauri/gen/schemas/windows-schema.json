@@ -207,10 +207,22 @@
           "markdownDescription": "Enables the install_github_artifact command without any pre-configured scope."
         },
         {
+          "description": "Enables the is_github_artifact_installed command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-is-github-artifact-installed",
+          "markdownDescription": "Enables the is_github_artifact_installed command without any pre-configured scope."
+        },
+        {
           "description": "Enables the launch_omniscience command without any pre-configured scope.",
           "type": "string",
           "const": "allow-launch-omniscience",
           "markdownDescription": "Enables the launch_omniscience command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_installed_versions command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-installed-versions",
+          "markdownDescription": "Enables the list_installed_versions command without any pre-configured scope."
         },
         {
           "description": "Enables the navigate_github_browser command without any pre-configured scope.",
@@ -279,10 +291,22 @@
           "markdownDescription": "Denies the install_github_artifact command without any pre-configured scope."
         },
         {
+          "description": "Denies the is_github_artifact_installed command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-is-github-artifact-installed",
+          "markdownDescription": "Denies the is_github_artifact_installed command without any pre-configured scope."
+        },
+        {
           "description": "Denies the launch_omniscience command without any pre-configured scope.",
           "type": "string",
           "const": "deny-launch-omniscience",
           "markdownDescription": "Denies the launch_omniscience command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_installed_versions command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-installed-versions",
+          "markdownDescription": "Denies the list_installed_versions command without any pre-configured scope."
         },
         {
           "description": "Denies the navigate_github_browser command without any pre-configured scope.",

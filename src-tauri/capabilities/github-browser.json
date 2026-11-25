@@ -9,5 +9,8 @@
       "https://www.github.com/**"
     ]
   },
-  "permissions": ["allow-install-github-artifact"]
+  "permissions": [
+    "allow-is-github-artifact-installed",
+    "allow-install-github-artifact"
+  ]
 }

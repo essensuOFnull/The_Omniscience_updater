@@ -49,23 +49,17 @@
           <div class="panel-heading">
             <div>
               <h2>Режим запуска</h2>
-              <p>Dev запускает исходники, Prod запускает выбранный EXE.</p>
+              <p>Выберите режим, затем установленную версию для запуска.</p>
             </div>
           </div>
           <div class="mode-options">
             <label><input type="radio" name="mode" value="dev"> Dev</label>
             <label><input type="radio" name="mode" value="prod"> Prod</label>
           </div>
-          <label class="field">
-            Каталог исходников
-            <input id="source-directory" type="text" placeholder="C:\The_Omniscience">
-          </label>
-          <label class="field">
-            Production EXE
-            <input id="production-executable" type="text" placeholder="C:\Omniscience\The_Omniscience.exe">
-          </label>
-          <button id="save-state" type="button" class="secondary">Сохранить настройки</button>
-          <p id="source-status" class="inline-status">Проверка рабочей копии…</p>
+          <h3 class="installed-heading">Установленные версии</h3>
+          <div id="installed-versions" class="installed-versions" role="radiogroup" aria-label="Установленные версии">
+            <p class="inline-status">Загрузка списка…</p>
+          </div>
         </article>
 
         <article class="panel">

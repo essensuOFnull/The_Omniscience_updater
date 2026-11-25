@@ -146,6 +146,59 @@ h2 {
   gap: 7px;
 }
 
+.installed-heading {
+  margin: 0 0 10px;
+  color: #cbd4e2;
+  font-size: 13px;
+}
+
+.installed-versions {
+  display: grid;
+  max-height: 260px;
+  gap: 8px;
+  overflow: auto;
+}
+
+.installed-version {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  border: 1px solid #343b4b;
+  border-radius: 8px;
+  padding: 10px;
+  background: #11151d;
+  cursor: pointer;
+}
+
+.installed-version:has(input:checked) {
+  border-color: #7866da;
+  background: rgb(63 53 112 / 24%);
+}
+
+.installed-version input {
+  margin: 3px 0 0;
+}
+
+.installed-version-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.installed-version-title {
+  color: #edf1f7;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.installed-version-path {
+  overflow-wrap: anywhere;
+  color: #9ca5b5;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 11px;
+}
+
 .field {
   display: grid;
   gap: 7px;
@@ -170,6 +223,10 @@ h2 {
   color: #aeb7c6;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.inline-status[data-state="error"] {
+  color: #ff9aa7;
 }
 
 .release-status[data-state="ready"] {

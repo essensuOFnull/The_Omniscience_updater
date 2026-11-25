@@ -8,6 +8,7 @@ const hint = document.querySelector('#log-hint');
 const installerButtons = [...document.querySelectorAll('button[data-action]')];
 const ansiEscape = /\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 let active = false;
+let managerState;
 
 function setBusy(isBusy, label = 'Готово') {
   active = isBusy;
@@ -29,44 +30,122 @@ async function getState() {
   return invoke('get_manager_state');
 }
 
-async function inspectSource() {
-  const sourceDirectory = document.querySelector('#source-directory').value.trim();
-  const sourceStatus = document.querySelector('#source-status');
-  sourceStatus.textContent = 'Проверка рабочей копии…';
-  try {
-    const result = await invoke('inspect_source', { sourceDirectory });
-    const details = [];
-    if (result.commit) details.push(`commit ${result.commit.slice(0, 12)}`);
-    if (result.branch) details.push(`ветка ${result.branch}`);
-    if (result.tag) details.push(`tag ${result.tag}`);
-    sourceStatus.textContent = [result.status, ...details].filter(Boolean).join(' · ');
-  } catch (error) {
-    sourceStatus.textContent = `Ошибка проверки: ${String(error)}`;
+function selectedMode() {
+  return document.querySelector('input[name="mode"]:checked')?.value || managerState?.mode || 'prod';
+}
+
+function updateLaunchSummary() {
+  const mode = selectedMode();
+  const selected = document.querySelector('#installed-versions input[name="installed-version"]:checked');
+  const launch = document.querySelector('#launch');
+  const summary = document.querySelector('#launch-summary');
+  if (!selected || selected.dataset.mode !== mode) {
+    summary.textContent = `${mode.toUpperCase()} · выберите установленную версию`;
+    launch.disabled = true;
+    return;
   }
+
+  summary.textContent = `${mode.toUpperCase()} · ${selected.dataset.title} · ${selected.value}`;
+  launch.disabled = false;
+}
+
+async function persistManagerState(updates = {}) {
+  managerState = await invoke('set_manager_state', {
+    mode: selectedMode(),
+    sourceDirectory: managerState?.sourceDirectory || '',
+    productionExecutable: managerState?.productionExecutable || '',
+    driveLetter: document.querySelector('#drive-letter').value,
+    browserUrl: document.querySelector('#github-url').value.trim(),
+    ...updates,
+  });
+  updateLaunchSummary();
+  return managerState;
 }
 
 async function saveState() {
-  const mode = document.querySelector('input[name="mode"]:checked')?.value || 'prod';
-  const sourceDirectory = document.querySelector('#source-directory').value.trim();
-  const productionExecutable = document.querySelector('#production-executable').value.trim();
-  const driveLetter = document.querySelector('#drive-letter').value;
-  const browserUrl = document.querySelector('#github-url').value.trim();
+  const mode = selectedMode();
+  const selected = document.querySelector('#installed-versions input[name="installed-version"]:checked');
+  const updates = {};
+  if (selected?.dataset.mode === mode) {
+    if (mode === 'dev') updates.sourceDirectory = selected.value;
+    else updates.productionExecutable = selected.value;
+  }
+  await persistManagerState(updates);
+}
+
+function renderInstalledVersion(version, mode, selectedPath) {
+  const label = document.createElement('label');
+  label.className = 'installed-version';
+
+  const radio = document.createElement('input');
+  radio.type = 'radio';
+  radio.name = 'installed-version';
+  radio.value = version.path;
+  radio.dataset.mode = mode;
+  radio.dataset.title = `${version.owner}/${version.repo} · ${version.tag}`;
+  radio.checked = version.path === selectedPath;
+
+  const copy = document.createElement('span');
+  copy.className = 'installed-version-copy';
+  const title = document.createElement('span');
+  title.className = 'installed-version-title';
+  title.textContent = radio.dataset.title;
+  const path = document.createElement('span');
+  path.className = 'installed-version-path';
+  path.textContent = version.path;
+  copy.append(title, path);
+  label.append(radio, copy);
+
+  radio.addEventListener('change', async () => {
+    const update = mode === 'dev'
+      ? { sourceDirectory: version.path }
+      : { productionExecutable: version.path };
+    try {
+      await persistManagerState(update);
+    } catch (error) {
+      appendOutput(`\nНе удалось выбрать версию: ${String(error)}\n`);
+      await loadInstalledVersions();
+    }
+  });
+  return label;
+}
+
+async function loadInstalledVersions() {
+  const mode = selectedMode();
+  const container = document.querySelector('#installed-versions');
+  container.replaceChildren();
+  const loading = document.createElement('p');
+  loading.className = 'inline-status';
+  loading.textContent = 'Загрузка списка…';
+  container.append(loading);
+
   try {
-    const state = await invoke('set_manager_state', {
-      mode,
-      sourceDirectory,
-      productionExecutable,
-      driveLetter,
-      browserUrl,
-    });
-    document.querySelector('#launch-summary').textContent =
-      state.mode === 'dev'
-        ? `Dev · ${state.sourceDirectory || 'каталог не задан'}`
-        : `Prod · ${state.productionExecutable || 'EXE не задан'}`;
-    await inspectSource();
+    const versions = await invoke('list_installed_versions', { mode });
+    container.replaceChildren();
+    if (versions.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'inline-status';
+      empty.textContent = `На диске ${document.querySelector('#drive-letter').value} установленные версии ${mode.toUpperCase()} не найдены.`;
+      container.append(empty);
+      updateLaunchSummary();
+      return;
+    }
+
+    const selectedPath = mode === 'dev'
+      ? managerState.sourceDirectory
+      : managerState.productionExecutable;
+    for (const version of versions) {
+      container.append(renderInstalledVersion(version, mode, selectedPath));
+    }
+    updateLaunchSummary();
   } catch (error) {
-    setBusy(false, 'Ошибка настроек');
-    appendOutput(`\nНе удалось сохранить настройки: ${String(error)}\n`);
+    container.replaceChildren();
+    const message = document.createElement('p');
+    message.className = 'inline-status';
+    message.dataset.state = 'error';
+    message.textContent = `Не удалось загрузить список: ${String(error)}`;
+    container.append(message);
+    updateLaunchSummary();
   }
 }
 
@@ -133,6 +212,16 @@ await listen('github-browser-load', (event) => {
   appendOutput(`\nGitHub WebView ${loadEvent}: ${url}\n`);
 });
 
+await listen('installed-version-changed', async () => {
+  try {
+    managerState = await getState();
+    document.querySelector(`input[name="mode"][value="${managerState.mode}"]`).checked = true;
+    await loadInstalledVersions();
+  } catch (error) {
+    appendOutput(`\nНе удалось обновить список установок: ${String(error)}\n`);
+  }
+});
+
 await listen('installer-finished', (event) => {
   const { success, exitCode } = event.payload;
   setBusy(false, success ? 'Установка завершена' : `Ошибка (код ${exitCode})`);
@@ -162,13 +251,26 @@ for (const button of installerButtons) {
   });
 }
 
-document.querySelector('#save-state').addEventListener('click', saveState);
 document.querySelector('#check-prerequisites').addEventListener('click', checkPrerequisites);
 document.querySelector('#check-release').addEventListener('click', checkLatestRelease);
-document.querySelector('#source-directory').addEventListener('change', inspectSource);
-document.querySelector('#drive-letter').addEventListener('change', () => {
+for (const radio of document.querySelectorAll('input[name="mode"]')) {
+  radio.addEventListener('change', async () => {
+    try {
+      await persistManagerState({ mode: radio.value });
+      await loadInstalledVersions();
+    } catch (error) {
+      appendOutput(`\nНе удалось изменить режим: ${String(error)}\n`);
+    }
+  });
+}
+document.querySelector('#drive-letter').addEventListener('change', async () => {
   updateInstallPathPreview();
-  saveState();
+  try {
+    await saveState();
+    await loadInstalledVersions();
+  } catch (error) {
+    appendOutput(`\nНе удалось сохранить диск установки: ${String(error)}\n`);
+  }
 });
 document.querySelector('#open-github').addEventListener('click', async () => {
   const url = document.querySelector('#github-url').value.trim();
@@ -206,6 +308,9 @@ document.querySelector('#prepare-release').addEventListener('click', async () =>
 
 document.querySelector('#launch').addEventListener('click', async () => {
   try {
+    if (!document.querySelector('#installed-versions input[name="installed-version"]:checked')) {
+      throw new Error('Сначала выберите установленную версию.');
+    }
     await saveState();
     const message = await invoke('launch_omniscience');
     appendOutput(`\n${message}\n`);
@@ -214,18 +319,12 @@ document.querySelector('#launch').addEventListener('click', async () => {
   }
 });
 
-const state = await getState();
-document.querySelector(`input[name="mode"][value="${state.mode === 'dev' ? 'dev' : 'prod'}"]`).checked = true;
-document.querySelector('#source-directory').value = state.sourceDirectory || '';
-document.querySelector('#production-executable').value = state.productionExecutable || '';
-document.querySelector('#drive-letter').value = state.driveLetter || 'C';
-document.querySelector('#github-url').value = state.browserUrl || 'https://github.com/EssenceOfDream/The_Omniscience/releases';
-document.querySelector('#launch-summary').textContent =
-  state.mode === 'dev'
-    ? `Dev · ${state.sourceDirectory || 'каталог не задан'}`
-    : `Prod · ${state.productionExecutable || 'EXE не задан'}`;
+managerState = await getState();
+document.querySelector(`input[name="mode"][value="${managerState.mode === 'dev' ? 'dev' : 'prod'}"]`).checked = true;
+document.querySelector('#drive-letter').value = managerState.driveLetter || 'C';
+document.querySelector('#github-url').value = managerState.browserUrl || 'https://github.com/EssenceOfDream/The_Omniscience/releases';
 updateInstallPathPreview();
 
-await inspectSource();
+await loadInstalledVersions();
 await checkPrerequisites();
 await checkLatestRelease();

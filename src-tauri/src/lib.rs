@@ -83,6 +83,16 @@ struct ReleaseStatus {
     error: Option<String>,
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct InstalledVersion {
+    mode: String,
+    owner: String,
+    repo: String,
+    tag: String,
+    path: String,
+}
+
 fn project_root() -> Result<PathBuf, String> {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -92,6 +102,11 @@ fn project_root() -> Result<PathBuf, String> {
 
 fn emit_output(app: &AppHandle, text: String) {
     let _ = app.emit("installer-output", serde_json::json!({ "text": text }));
+}
+
+fn emit_installed_version_changed(app: &AppHandle) -> Result<(), String> {
+    app.emit("installed-version-changed", serde_json::json!({}))
+        .map_err(|error| format!("Не удалось обновить список установок: {error}"))
 }
 
 fn state_file(app: &AppHandle) -> Result<PathBuf, String> {
@@ -142,7 +157,24 @@ fn sanitize_path_component(value: &str) -> Result<String, String> {
     Ok(sanitized)
 }
 
-fn installation_root(app: &AppHandle, owner: &str, repo: &str, tag: &str, mode: &str) -> Result<PathBuf, String> {
+fn installation_base(drive_letter: &str) -> Result<PathBuf, String> {
+    let drive = drive_letter.trim();
+    if drive.len() != 1 || !drive.chars().all(|character| character.is_ascii_alphabetic()) {
+        return Err("Выберите букву диска от A до Z.".to_string());
+    }
+    Ok(PathBuf::from(format!(
+        "{}:\\The_Omniscience",
+        drive.to_ascii_uppercase()
+    )))
+}
+
+fn installation_root(
+    app: &AppHandle,
+    owner: &str,
+    repo: &str,
+    tag: &str,
+    mode: &str,
+) -> Result<PathBuf, String> {
     if mode != "prod" && mode != "dev" {
         return Err("Тип установки должен быть prod или dev.".to_string());
     }
@@ -150,15 +182,120 @@ fn installation_root(app: &AppHandle, owner: &str, repo: &str, tag: &str, mode: 
     let repo = sanitize_path_component(repo)?;
     let tag = sanitize_path_component(tag)?;
     let state = load_state(app);
-    let drive = sanitize_path_component(&state.drive_letter)?;
-    if drive.len() != 1 || !drive.chars().next().is_some_and(|character| character.is_ascii_alphabetic()) {
-        return Err("Выберите букву диска от A до Z.".to_string());
-    }
-    Ok(PathBuf::from(format!("{}:\\The_Omniscience", drive.to_ascii_uppercase()))
+    Ok(installation_base(&state.drive_letter)?
         .join(owner)
         .join(repo)
         .join(tag)
         .join(mode))
+}
+
+fn immediate_directories(path: &Path) -> Result<Vec<PathBuf>, String> {
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(format!("Не удалось прочитать {}: {error}", path.display()));
+        }
+    };
+    let mut directories = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("Не удалось прочитать каталог: {error}"))?;
+        if entry
+            .file_type()
+            .map_err(|error| format!("Не удалось проверить {}: {error}", entry.path().display()))?
+            .is_dir()
+        {
+            directories.push(entry.path());
+        }
+    }
+    Ok(directories)
+}
+
+fn path_is_directory(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(metadata.file_type().is_dir()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("Не удалось проверить {}: {error}", path.display())),
+    }
+}
+
+fn path_is_file(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(metadata.file_type().is_file()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("Не удалось проверить {}: {error}", path.display())),
+    }
+}
+
+fn scan_installed_versions(root: &Path, mode: &str) -> Result<Vec<InstalledVersion>, String> {
+    if mode != "dev" && mode != "prod" {
+        return Err("Тип установки должен быть prod или dev.".to_string());
+    }
+
+    let mut installed = Vec::new();
+    for owner_path in immediate_directories(root)? {
+        let owner = owner_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        for repo_path in immediate_directories(&owner_path)? {
+            let repo = repo_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            for tag_path in immediate_directories(&repo_path)? {
+                let tag = tag_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                let install_path = tag_path.join(mode);
+                if !path_is_directory(&install_path)? {
+                    continue;
+                }
+
+                if mode == "dev" {
+                    if path_is_directory(&install_path.join(".git"))?
+                        && path_is_file(&install_path.join("package.json"))?
+                    {
+                        installed.push(InstalledVersion {
+                            mode: mode.to_string(),
+                            owner: owner.clone(),
+                            repo: repo.clone(),
+                            tag,
+                            path: install_path.to_string_lossy().into_owned(),
+                        });
+                    }
+                    continue;
+                }
+
+                let entries = fs::read_dir(&install_path).map_err(|error| {
+                    format!("Не удалось прочитать {}: {error}", install_path.display())
+                })?;
+                for entry in entries {
+                    let entry =
+                        entry.map_err(|error| format!("Не удалось прочитать каталог: {error}"))?;
+                    if !entry
+                        .file_type()
+                        .map_err(|error| {
+                            format!("Не удалось проверить {}: {error}", entry.path().display())
+                        })?
+                        .is_file()
+                    {
+                        continue;
+                    }
+                    if entry
+                        .path()
+                        .extension()
+                        .is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("exe"))
+                    {
+                        installed.push(InstalledVersion {
+                            mode: mode.to_string(),
+                            owner: owner.clone(),
+                            repo: repo.clone(),
+                            tag: tag.clone(),
+                            path: entry.path().to_string_lossy().into_owned(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    installed.sort_by(|left, right| {
+        (&left.owner, &left.repo, &left.tag, &left.path)
+            .cmp(&(&right.owner, &right.repo, &right.tag, &right.path))
+    });
+    Ok(installed)
 }
 
 fn run_capture(program: &Path, args: &[&str], current_dir: Option<&Path>) -> Result<(bool, i32, String), String> {
@@ -209,32 +346,74 @@ fn github_injection_script() -> String {
 
   function addButton(link, mode) {
     if (link.dataset.omniscienceProcessed) return;
-    link.dataset.omniscienceProcessed = '1';
     const info = repoInfo();
     const tag = findTag(link);
     if (!info || !tag) return;
+    link.dataset.omniscienceProcessed = '1';
 
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = mode === 'prod' ? 'Установить как Prod' : 'Установить как Dev';
+    const installLabel = mode === 'prod' ? 'Установить как Prod' : 'Установить как Dev';
+    button.textContent = 'Проверка…';
+    button.disabled = true;
     button.style.cssText = 'margin-left:10px;padding:5px 8px;border:1px solid #6e7681;border-radius:6px;background:#238636;color:#fff;font-size:12px;cursor:pointer;';
-    button.addEventListener('click', (event) => {
+    const status = document.createElement('span');
+    status.style.cssText = 'margin-left:6px;color:#8b949e;font-size:12px;';
+    button.addEventListener('click', async (event) => {
       event.preventDefault();
       event.stopPropagation();
-      invoke('install_github_artifact', {
-        owner: info.owner,
-        repo: info.repo,
-        tag,
-        mode,
-        assetUrl: mode === 'prod'
-          ? new URL(link.href, location.href).href
-          : 'https://github.com/' + info.owner + '/' + info.repo,
-        assetName: mode === 'prod'
-          ? decodeURIComponent(link.pathname.split('/').pop() || 'Omniscience.exe')
-          : 'source'
-      }).catch((error) => alert('Ошибка установки: ' + error));
+      button.disabled = true;
+      button.textContent = 'Установка…';
+      status.textContent = '';
+      try {
+        await invoke('install_github_artifact', {
+          owner: info.owner,
+          repo: info.repo,
+          tag,
+          mode,
+          assetUrl: mode === 'prod'
+            ? new URL(link.href, location.href).href
+            : 'https://github.com/' + info.owner + '/' + info.repo,
+          assetName: mode === 'prod'
+            ? decodeURIComponent(link.pathname.split('/').pop() || 'Omniscience.exe')
+            : 'source'
+        });
+        button.dataset.installed = 'true';
+        button.textContent = 'Переустановить';
+        status.textContent = 'Установлена';
+      } catch (error) {
+        button.textContent = button.dataset.installed === 'true' ? 'Переустановить' : installLabel;
+        status.textContent = 'Ошибка установки';
+        status.title = String(error);
+      } finally {
+        button.disabled = false;
+      }
     });
     link.insertAdjacentElement('afterend', button);
+    button.insertAdjacentElement('afterend', status);
+
+    (async () => {
+      try {
+        const installed = await invoke('is_github_artifact_installed', {
+          owner: info.owner,
+          repo: info.repo,
+          tag,
+          mode,
+          assetName: mode === 'prod'
+            ? decodeURIComponent(link.pathname.split('/').pop() || 'Omniscience.exe')
+            : 'source'
+        });
+        button.dataset.installed = String(installed);
+        button.textContent = installed ? 'Переустановить' : installLabel;
+        status.textContent = installed ? 'Установлена' : '';
+      } catch (error) {
+        button.textContent = installLabel;
+        status.textContent = 'Не удалось проверить установку';
+        status.title = String(error);
+      } finally {
+        button.disabled = false;
+      }
+    })();
   }
 
   function decorate() {
@@ -416,6 +595,7 @@ fn install_github_artifact(app: AppHandle, owner: String, repo: String, tag: Str
         state.mode = "dev".to_string();
         state.source_directory = destination.to_string_lossy().to_string();
         save_state(&app, &state)?;
+        emit_installed_version_changed(&app)?;
         return Ok(destination.to_string_lossy().to_string());
     }
 
@@ -442,6 +622,7 @@ fn install_github_artifact(app: AppHandle, owner: String, repo: String, tag: Str
     state.mode = "prod".to_string();
     state.production_executable = executable.to_string_lossy().to_string();
     save_state(&app, &state)?;
+    emit_installed_version_changed(&app)?;
     Command::new(&executable)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -454,6 +635,37 @@ fn install_github_artifact(app: AppHandle, owner: String, repo: String, tag: Str
 #[tauri::command]
 fn get_manager_state(app: AppHandle) -> ManagerState {
     load_state(&app)
+}
+
+#[tauri::command]
+fn list_installed_versions(app: AppHandle, mode: String) -> Result<Vec<InstalledVersion>, String> {
+    let state = load_state(&app);
+    let root = installation_base(&state.drive_letter)?;
+    scan_installed_versions(&root, &mode)
+}
+
+#[tauri::command]
+fn is_github_artifact_installed(
+    app: AppHandle,
+    owner: String,
+    repo: String,
+    tag: String,
+    mode: String,
+    asset_name: String,
+) -> Result<bool, String> {
+    let directory = installation_root(&app, &owner, &repo, &tag, &mode)?;
+    if mode == "dev" {
+        return Ok(
+            path_is_directory(&directory.join(".git"))?
+                && path_is_file(&directory.join("package.json"))?,
+        );
+    }
+
+    let asset_name = sanitize_path_component(&asset_name)?;
+    if !asset_name.to_ascii_lowercase().ends_with(".exe") {
+        return Err("Ожидался production-EXE-файл.".to_string());
+    }
+    path_is_file(&directory.join(asset_name))
 }
 
 #[tauri::command]
@@ -823,6 +1035,7 @@ pub fn run() {
             start_install,
             get_manager_state,
             set_manager_state,
+            list_installed_versions,
             check_prerequisites,
             inspect_source,
             prepare_release,
@@ -831,8 +1044,68 @@ pub fn run() {
             open_github_browser,
             navigate_github_browser,
             open_github_devtools,
+            is_github_artifact_installed,
             install_github_artifact
         ])
         .run(tauri::generate_context!())
         .expect("error while running Omniscience Updater");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scan_installed_versions;
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    struct TestRoot(PathBuf);
+
+    impl TestRoot {
+        fn new() -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "omniscience-updater-test-{}-{unique}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn scan_lists_runnable_dev_and_exe_installations() {
+        let root = TestRoot::new();
+        let dev = root.0.join("owner").join("repo").join("v1").join("dev");
+        fs::create_dir_all(dev.join(".git")).unwrap();
+        fs::write(dev.join("package.json"), "{}").unwrap();
+
+        let prod = root.0.join("owner").join("repo").join("v2").join("prod");
+        fs::create_dir_all(&prod).unwrap();
+        fs::write(prod.join("app.exe"), b"").unwrap();
+        fs::write(prod.join("readme.txt"), b"").unwrap();
+
+        let dev_versions = scan_installed_versions(&root.0, "dev").unwrap();
+        assert_eq!(dev_versions.len(), 1);
+        assert_eq!(dev_versions[0].tag, "v1");
+        assert_eq!(dev_versions[0].path, dev.to_string_lossy().to_string());
+
+        let prod_versions = scan_installed_versions(&root.0, "prod").unwrap();
+        assert_eq!(prod_versions.len(), 1);
+        assert_eq!(prod_versions[0].tag, "v2");
+        assert_eq!(
+            prod_versions[0].path,
+            prod.join("app.exe").to_string_lossy().to_string()
+        );
+    }
 }

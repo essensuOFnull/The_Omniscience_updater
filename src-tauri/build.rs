@@ -4,6 +4,7 @@ fn main() {
             "start_install",
             "get_manager_state",
             "set_manager_state",
+            "list_installed_versions",
             "check_prerequisites",
             "inspect_source",
             "prepare_release",
@@ -12,6 +13,7 @@ fn main() {
             "open_github_browser",
             "navigate_github_browser",
             "open_github_devtools",
+            "is_github_artifact_installed",
             "install_github_artifact",
         ]));
     tauri_build::try_build(attributes).expect("failed to run tauri-build");

@@ -8,6 +8,7 @@
     "allow-start-install",
     "allow-get-manager-state",
     "allow-set-manager-state",
+    "allow-list-installed-versions",
     "allow-check-prerequisites",
     "allow-inspect-source",
     "allow-prepare-release",
