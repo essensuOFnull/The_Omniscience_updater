@@ -11,6 +11,7 @@ fn main() {
             "prepare_release",
             "check_latest_release",
             "launch_omniscience",
+            "stop_all_omniscience",
             "open_github_browser",
             "navigate_github_browser",
             "open_github_devtools",

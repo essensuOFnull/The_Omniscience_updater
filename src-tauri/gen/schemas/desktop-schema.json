@@ -267,6 +267,12 @@
           "markdownDescription": "Enables the start_install command without any pre-configured scope."
         },
         {
+          "description": "Enables the stop_all_omniscience command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-stop-all-omniscience",
+          "markdownDescription": "Enables the stop_all_omniscience command without any pre-configured scope."
+        },
+        {
           "description": "Denies the check_latest_release command without any pre-configured scope.",
           "type": "string",
           "const": "deny-check-latest-release",
@@ -355,6 +361,12 @@
           "type": "string",
           "const": "deny-start-install",
           "markdownDescription": "Denies the start_install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stop_all_omniscience command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-stop-all-omniscience",
+          "markdownDescription": "Denies the stop_all_omniscience command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",

@@ -15,6 +15,7 @@
     "allow-prepare-release",
     "allow-check-latest-release",
     "allow-launch-omniscience",
+    "allow-stop-all-omniscience",
     "allow-open-github-browser",
     "allow-navigate-github-browser",
     "allow-open-github-devtools",

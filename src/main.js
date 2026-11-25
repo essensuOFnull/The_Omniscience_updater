@@ -1,11 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { compareReleaseTags } from './version-sort.js';
 import './styles.css';
 
 const log = document.querySelector('#log');
 const status = document.querySelector('#status');
 const hint = document.querySelector('#log-hint');
 const installerButtons = [...document.querySelectorAll('button[data-action]')];
+const stopOmniscienceButton = document.querySelector('#stop-omniscience');
 const logQueue = [];
 const logFlushIntervalMs = 50;
 const logFlushCharLimit = 65536;
@@ -34,6 +36,7 @@ let followLogOutput = true;
 function setBusy(isBusy, label = 'Готово') {
   active = isBusy;
   for (const button of installerButtons) button.disabled = isBusy;
+  stopOmniscienceButton.disabled = isBusy;
   document.querySelector('#launch').disabled = isBusy;
   status.textContent = isBusy ? 'Выполняется…' : label;
   status.dataset.state = isBusy ? 'busy' : label === 'Готово' ? 'idle' : 'error';
@@ -44,6 +47,13 @@ function appendOutput(text) {
   if (!output) return;
   logQueue.push(output);
   scheduleLogFlush();
+}
+
+function scrollToLog() {
+  document.querySelector('.log-section').scrollIntoView({
+    behavior: 'smooth',
+    block: 'start',
+  });
 }
 
 function scheduleLogFlush() {
@@ -307,6 +317,12 @@ async function loadInstalledVersions() {
 
   try {
     const versions = await invoke('list_installed_versions', { mode });
+    versions.sort((left, right) => (
+      compareReleaseTags(right.tag, left.tag)
+      || left.owner.localeCompare(right.owner)
+      || left.repo.localeCompare(right.repo)
+      || left.path.localeCompare(right.path)
+    ));
     container.replaceChildren();
     if (versions.length === 0) {
       const empty = document.createElement('p');
@@ -423,6 +439,7 @@ for (const button of installerButtons) {
     if (active) return;
     const action = button.dataset.action;
     clearLogOutput();
+  scrollToLog();
     hint.textContent = action === 'winget'
       ? 'Подготовка App Installer'
       : 'Подготовка Microsoft Store';
@@ -460,6 +477,7 @@ document.querySelector('#drive-letter').addEventListener('change', async () => {
 });
 document.querySelector('#open-github').addEventListener('click', async () => {
   const url = document.querySelector('#github-url').value.trim();
+  scrollToLog();
   appendOutput(`\nОткрытие GitHub: ${url || '(адрес не указан)'}\n`);
   try {
     await saveState();
@@ -470,6 +488,7 @@ document.querySelector('#open-github').addEventListener('click', async () => {
   }
 });
 document.querySelector('#open-github-devtools').addEventListener('click', async () => {
+  scrollToLog();
   try {
     await invoke('open_github_devtools');
   } catch (error) {
@@ -479,7 +498,8 @@ document.querySelector('#open-github-devtools').addEventListener('click', async 
 
 document.querySelector('#launch').addEventListener('click', async () => {
   const isDev = selectedMode() === 'dev';
-  if (isDev) setBusy(true, 'Подготовка Dev');
+  scrollToLog();
+  setBusy(true, isDev ? 'Подготовка Dev' : 'Запуск Omniscience');
   try {
     if (!document.querySelector('#installed-versions input[name="installed-version"]:checked')) {
       throw new Error('Сначала выберите установленную версию.');
@@ -491,6 +511,24 @@ document.querySelector('#launch').addEventListener('click', async () => {
   } catch (error) {
     setBusy(false, 'Ошибка запуска');
     appendOutput(`\nНе удалось запустить: ${String(error)}\n`);
+  }
+});
+
+stopOmniscienceButton.addEventListener('click', async () => {
+  if (active) return;
+  scrollToLog();
+  setBusy(true, 'Завершение Omniscience');
+  try {
+    const stoppedCount = await invoke('stop_all_omniscience');
+    appendOutput(
+      stoppedCount > 0
+        ? `\nЗавершено процессов Omniscience: ${stoppedCount}.\n`
+        : '\nЗапущенные процессы Omniscience не найдены.\n',
+    );
+    setBusy(false);
+  } catch (error) {
+    setBusy(false, 'Ошибка завершения');
+    appendOutput(`\nНе удалось завершить Omniscience: ${String(error)}\n`);
   }
 });
 

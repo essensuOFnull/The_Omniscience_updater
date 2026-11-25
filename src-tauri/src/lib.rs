@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     env,
     fs::{self, OpenOptions},
     io::{BufRead, BufReader, Read, Write},
@@ -1385,18 +1386,229 @@ fn tauri_dev_config(port: u16) -> Value {
     })
 }
 
+fn append_executables_from_directory(
+    directory: &Path,
+    executable_paths: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!("Не удалось прочитать {}: {error}", directory.display()));
+        }
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!("Не удалось прочитать каталог {}: {error}", directory.display())
+        })?;
+        if entry
+            .file_type()
+            .map_err(|error| format!("Не удалось проверить {}: {error}", entry.path().display()))?
+            .is_file()
+            && entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("exe"))
+        {
+            executable_paths.push(entry.path());
+        }
+    }
+    Ok(())
+}
+
+fn omniscience_executable_paths(state: &ManagerState) -> Result<Vec<PathBuf>, String> {
+    let mut installation_roots = vec![installation_base(&state.drive_letter)?];
+    for drive_letter in 'A'..='Z' {
+        let root = installation_base(&drive_letter.to_string())?;
+        if root.is_dir() && !installation_roots.contains(&root) {
+            installation_roots.push(root);
+        }
+    }
+
+    let mut executable_paths = Vec::new();
+    let mut development_directories = Vec::new();
+    for installation_root in installation_roots {
+        let production_versions = scan_installed_versions(&installation_root, "prod")?;
+        let installed_development = scan_installed_versions(&installation_root, "dev")?;
+        executable_paths.extend(
+            production_versions
+                .into_iter()
+                .map(|version| PathBuf::from(version.path)),
+        );
+        development_directories.extend(
+            installed_development
+                .into_iter()
+                .map(|version| PathBuf::from(version.path)),
+        );
+    }
+    append_development_executables(state, development_directories, &mut executable_paths)?;
+    Ok(deduplicate_executable_paths(executable_paths))
+}
+
+#[cfg(test)]
+fn omniscience_executable_paths_in_root(
+    state: &ManagerState,
+    installation_root: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    let production_versions = scan_installed_versions(installation_root, "prod")?;
+    let development_versions = scan_installed_versions(installation_root, "dev")?;
+    let mut executable_paths: Vec<PathBuf> = production_versions
+        .into_iter()
+        .map(|version| PathBuf::from(version.path))
+        .collect();
+
+    let development_directories: Vec<PathBuf> = development_versions
+        .into_iter()
+        .map(|version| PathBuf::from(version.path))
+        .collect();
+    append_development_executables(state, development_directories, &mut executable_paths)?;
+    Ok(deduplicate_executable_paths(executable_paths))
+}
+
+fn append_development_executables(
+    state: &ManagerState,
+    mut development_directories: Vec<PathBuf>,
+    executable_paths: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    if !state.source_directory.trim().is_empty() {
+        development_directories.push(PathBuf::from(state.source_directory.trim()));
+    }
+    for directory in development_directories {
+        append_executables_from_directory(
+            &directory.join("src-tauri").join("target").join("debug"),
+            executable_paths,
+        )?;
+    }
+    if !state.production_executable.trim().is_empty() {
+        executable_paths.push(PathBuf::from(state.production_executable.trim()));
+    }
+    Ok(())
+}
+
+fn deduplicate_executable_paths(mut executable_paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    executable_paths.retain(|path| seen.insert(path.to_string_lossy().to_lowercase()));
+    executable_paths.sort();
+    executable_paths
+}
+
+fn terminate_omniscience_processes(executable_paths: &[PathBuf]) -> Result<usize, String> {
+    if executable_paths.is_empty() {
+        return Ok(0);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = executable_paths;
+        Err("Завершение процессов Omniscience поддерживается только в Windows.".to_string())
+    }
+    #[cfg(windows)]
+    {
+        let target_paths: Vec<String> = executable_paths
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
+        let target_paths = serde_json::to_string(&target_paths)
+            .map_err(|error| format!("Не удалось подготовить список Omniscience EXE: {error}"))?;
+        let script = r#"
+$ErrorActionPreference = 'Stop'
+$targetSet = @{}
+foreach ($target in (ConvertFrom-Json -InputObject $env:OMNISCIENCE_EXECUTABLE_PATHS)) {
+    $targetSet[[IO.Path]::GetFullPath([string]$target)] = $true
+}
+$matchedProcesses = @(Get-CimInstance -ClassName Win32_Process | Where-Object {
+    $_.ExecutablePath -and $targetSet.ContainsKey([IO.Path]::GetFullPath($_.ExecutablePath))
+})
+$processIds = @($matchedProcesses | ForEach-Object { [int]$_.ProcessId })
+if ($processIds.Count -gt 0) {
+    foreach ($processId in $processIds) {
+        $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+        if ($process) { [void]$process.CloseMainWindow() }
+    }
+    Wait-Process -Id $processIds -Timeout 5 -ErrorAction SilentlyContinue
+    $remainingIds = @(Get-CimInstance -ClassName Win32_Process | Where-Object {
+        $_.ProcessId -in $processIds -and $_.ExecutablePath -and
+            $targetSet.ContainsKey([IO.Path]::GetFullPath($_.ExecutablePath))
+    } | ForEach-Object { [int]$_.ProcessId })
+    if ($remainingIds.Count -gt 0) {
+        Stop-Process -Id $remainingIds -Force -ErrorAction Stop
+        Wait-Process -Id $remainingIds -Timeout 10 -ErrorAction SilentlyContinue
+    }
+}
+$remaining = @(Get-CimInstance -ClassName Win32_Process | Where-Object {
+    $_.ExecutablePath -and $targetSet.ContainsKey([IO.Path]::GetFullPath($_.ExecutablePath))
+})
+if ($remaining.Count -gt 0) {
+    throw "Some Omniscience processes did not exit: $((@($remaining | ForEach-Object { $_.ProcessId })) -join ', ')"
+}
+Write-Output $processIds.Count
+"#;
+        let system_root = env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+        let powershell = system_root
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        let output = Command::new(powershell)
+            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
+            .env("OMNISCIENCE_EXECUTABLE_PATHS", target_paths)
+            .output()
+            .map_err(|error| format!("Не удалось запустить PowerShell для завершения Omniscience: {error}"))?;
+        if !output.status.success() {
+            let details = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if details.is_empty() {
+                format!("PowerShell завершился с кодом {}.", output.status.code().unwrap_or(1))
+            } else {
+                format!("Не удалось завершить процессы Omniscience: {details}")
+            });
+        }
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse::<usize>()
+            .map_err(|error| format!("Не удалось прочитать результат завершения Omniscience: {error}"))
+    }
+}
+
+fn stop_all_omniscience_processes_for_state(state: &ManagerState) -> Result<usize, String> {
+    let executable_paths = omniscience_executable_paths(state)?;
+    terminate_omniscience_processes(&executable_paths)
+}
+
 #[tauri::command]
 fn launch_omniscience(
     app: AppHandle,
     installer_state: State<'_, InstallerState>,
 ) -> Result<String, String> {
     let state = load_state(&app);
-    if state.mode == "dev" {
-        let directory = PathBuf::from(state.source_directory);
-        let running = installer_state.running.clone();
-        if running.swap(true, Ordering::AcqRel) {
-            return Err("Подготовка или установка уже выполняется.".to_string());
+    let development_directory = if state.mode == "dev" {
+        let directory = PathBuf::from(state.source_directory.trim());
+        if !directory.join("package.json").is_file() {
+            return Err("Dev-режим требует каталог исходников с package.json.".to_string());
         }
+        Some(directory)
+    } else {
+        let executable = PathBuf::from(state.production_executable.trim());
+        if !executable.is_file() {
+            return Err("Production EXE не настроен или файл отсутствует.".to_string());
+        }
+        None
+    };
+    let running = installer_state.running.clone();
+    if running
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("Подготовка или установка уже выполняется.".to_string());
+    }
+    let stopped_count = match stop_all_omniscience_processes_for_state(&state) {
+        Ok(count) => count,
+        Err(error) => {
+            running.store(false, Ordering::Release);
+            return Err(error);
+        }
+    };
+    if let Some(directory) = development_directory {
         let app_handle = app.clone();
         thread::spawn(move || {
             let result = launch_dev(&app_handle, &directory);
@@ -1413,20 +1625,37 @@ fn launch_omniscience(
                 emit_output(&app_handle, format!("\nОшибка подготовки Dev: {message}\n"));
             }
         });
-        Ok("Подготовка Dev запущена; следите за этапами в журнале.".to_string())
+        Ok(format!(
+            "Завершено предыдущих процессов Omniscience: {stopped_count}. Подготовка Dev запущена; следите за этапами в журнале."
+        ))
     } else {
         let executable = PathBuf::from(state.production_executable);
-        if !executable.is_file() {
-            return Err("Production EXE не настроен или файл отсутствует.".to_string());
-        }
-        Command::new(executable)
+        let launch_result = Command::new(executable)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|error| format!("Не удалось запустить Prod: {error}"))?;
-        Ok("Production-запуск инициирован.".to_string())
+            .map_err(|error| format!("Не удалось запустить Prod: {error}"));
+        running.store(false, Ordering::Release);
+        launch_result?;
+        Ok(format!(
+            "Завершено предыдущих процессов Omniscience: {stopped_count}. Production-запуск инициирован."
+        ))
     }
+}
+
+#[tauri::command]
+fn stop_all_omniscience(state: State<'_, InstallerState>, app: AppHandle) -> Result<usize, String> {
+    if state
+        .running
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("Подготовка или установка уже выполняется.".to_string());
+    }
+    let result = stop_all_omniscience_processes_for_state(&load_state(&app));
+    state.running.store(false, Ordering::Release);
+    result
 }
 
 #[tauri::command]
@@ -1566,6 +1795,7 @@ pub fn run() {
             prepare_release,
             check_latest_release,
             launch_omniscience,
+            stop_all_omniscience,
             open_github_browser,
             navigate_github_browser,
             open_github_devtools,
@@ -1578,7 +1808,10 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{node_is_compatible, scan_installed_versions, tauri_dev_config};
+    use super::{
+        ManagerState, node_is_compatible, omniscience_executable_paths_in_root,
+        scan_installed_versions, tauri_dev_config,
+    };
     use std::{
         fs,
         path::PathBuf,
@@ -1632,6 +1865,46 @@ mod tests {
             prod_versions[0].path,
             prod.join("app.exe").to_string_lossy().to_string()
         );
+    }
+
+    #[test]
+    fn collects_all_installed_prod_and_dev_executables() {
+        let root = TestRoot::new();
+        let installation_root = root.0.join("The_Omniscience");
+        let prod = installation_root
+            .join("owner")
+            .join("repo")
+            .join("v1")
+            .join("prod")
+            .join("Omniscience.exe");
+        fs::create_dir_all(prod.parent().unwrap()).unwrap();
+        fs::write(&prod, b"").unwrap();
+
+        let dev = installation_root
+            .join("owner")
+            .join("repo")
+            .join("v2")
+            .join("dev");
+        fs::create_dir_all(dev.join(".git")).unwrap();
+        fs::write(dev.join("package.json"), "{}").unwrap();
+        let dev_executable = dev
+            .join("src-tauri")
+            .join("target")
+            .join("debug")
+            .join("The_Omniscience.exe");
+        fs::create_dir_all(dev_executable.parent().unwrap()).unwrap();
+        fs::write(&dev_executable, b"").unwrap();
+
+        let state = ManagerState {
+            mode: "prod".to_string(),
+            source_directory: String::new(),
+            production_executable: String::new(),
+            drive_letter: "C".to_string(),
+            browser_url: String::new(),
+        };
+        let executables = omniscience_executable_paths_in_root(&state, &installation_root).unwrap();
+        assert!(executables.contains(&prod));
+        assert!(executables.contains(&dev_executable));
     }
 
     #[test]
