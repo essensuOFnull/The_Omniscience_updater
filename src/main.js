@@ -6,25 +6,211 @@ const log = document.querySelector('#log');
 const status = document.querySelector('#status');
 const hint = document.querySelector('#log-hint');
 const installerButtons = [...document.querySelectorAll('button[data-action]')];
-const ansiEscape = /\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+const logQueue = [];
+const logFlushIntervalMs = 50;
+const logFlushCharLimit = 65536;
+const logTextNodeLimit = 8192;
+const logVisibleCharLimit = 500000;
+const logStyle = {
+  foreground: '',
+  background: '',
+  bold: false,
+  dim: false,
+  italic: false,
+  underline: false,
+};
 let active = false;
 let managerState;
+let logQueueHead = 0;
+let logQueueOffset = 0;
+let logFlushScheduled = false;
+let activeLogNode;
+let activeLogNodeLength = 0;
+let activeLogNodeStyle = '';
+let logEntries = [];
+let logRenderedLength = 0;
+let followLogOutput = true;
 
 function setBusy(isBusy, label = 'Готово') {
   active = isBusy;
   for (const button of installerButtons) button.disabled = isBusy;
+  document.querySelector('#launch').disabled = isBusy;
   status.textContent = isBusy ? 'Выполняется…' : label;
   status.dataset.state = isBusy ? 'busy' : label === 'Готово' ? 'idle' : 'error';
 }
 
 function appendOutput(text) {
-  const cleanText = String(text).replace(ansiEscape, '').replace(/\r\n?/g, '\n');
-  log.textContent += cleanText;
-  if (log.textContent.length > 200000) {
-    log.textContent = log.textContent.slice(-180000);
-  }
-  log.scrollTop = log.scrollHeight;
+  const output = String(text).replace(/\r\n?/g, '\n');
+  if (!output) return;
+  logQueue.push(output);
+  scheduleLogFlush();
 }
+
+function scheduleLogFlush() {
+  if (logFlushScheduled) return;
+  logFlushScheduled = true;
+  setTimeout(flushLogOutput, logFlushIntervalMs);
+}
+
+function takeLogBatch(maxLength) {
+  const chunks = [];
+  let length = 0;
+  while (logQueueHead < logQueue.length && length < maxLength) {
+    const queued = logQueue[logQueueHead];
+    const available = queued.length - logQueueOffset;
+    let take = Math.min(available, maxLength - length);
+    const end = logQueueOffset + take;
+    if (
+      take < available
+      && /[\uD800-\uDBFF]/.test(queued[end - 1])
+      && /[\uDC00-\uDFFF]/.test(queued[end])
+    ) {
+      take += 1;
+    }
+    chunks.push(queued.slice(logQueueOffset, logQueueOffset + take));
+    length += take;
+    logQueueOffset += take;
+    if (logQueueOffset === queued.length) {
+      logQueueHead += 1;
+      logQueueOffset = 0;
+    }
+  }
+  if (logQueueHead === logQueue.length) {
+    logQueue.length = 0;
+    logQueueHead = 0;
+  } else if (logQueueHead > 256) {
+    logQueue.splice(0, logQueueHead);
+    logQueueHead = 0;
+  }
+  return chunks.join('');
+}
+
+function currentLogStyle() {
+  return [
+    logStyle.foreground,
+    logStyle.background,
+    logStyle.bold ? 'ansi-bold' : '',
+    logStyle.dim ? 'ansi-dim' : '',
+    logStyle.italic ? 'ansi-italic' : '',
+    logStyle.underline ? 'ansi-underline' : '',
+  ].filter(Boolean).join(' ');
+}
+
+function resetLogStyle() {
+  logStyle.foreground = '';
+  logStyle.background = '';
+  logStyle.bold = false;
+  logStyle.dim = false;
+  logStyle.italic = false;
+  logStyle.underline = false;
+}
+
+function applyAnsiStyle(parameters) {
+  const codes = parameters === '' ? [0] : parameters.split(';').map((code) => Number(code || 0));
+  for (let index = 0; index < codes.length; index += 1) {
+    const code = codes[index];
+    if (code === 0) resetLogStyle();
+    else if (code === 1) logStyle.bold = true;
+    else if (code === 2) logStyle.dim = true;
+    else if (code === 3) logStyle.italic = true;
+    else if (code === 4) logStyle.underline = true;
+    else if (code === 22) {
+      logStyle.bold = false;
+      logStyle.dim = false;
+    } else if (code === 23) logStyle.italic = false;
+    else if (code === 24) logStyle.underline = false;
+    else if (code === 39) logStyle.foreground = '';
+    else if (code === 49) logStyle.background = '';
+    else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) {
+      logStyle.foreground = `ansi-fg-${code}`;
+    } else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) {
+      logStyle.background = `ansi-bg-${code}`;
+    }
+  }
+}
+
+function appendStyledLogText(text, style) {
+  let offset = 0;
+  while (offset < text.length) {
+    if (!activeLogNode || activeLogNodeLength >= logTextNodeLimit || activeLogNodeStyle !== style) {
+      activeLogNode = style ? document.createElement('span') : document.createTextNode('');
+      if (style) activeLogNode.className = style;
+      activeLogNodeStyle = style;
+      activeLogNodeLength = 0;
+      log.append(activeLogNode);
+      logEntries.push({ node: activeLogNode, length: 0 });
+    }
+    let end = Math.min(offset + logTextNodeLimit - activeLogNodeLength, text.length);
+    if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1]) && /[\uDC00-\uDFFF]/.test(text[end])) {
+      if (end - offset === 1 && activeLogNodeLength > 0) {
+        activeLogNode = undefined;
+        continue;
+      }
+      end -= 1;
+    }
+    const part = text.slice(offset, end);
+    if (activeLogNode.nodeType === Node.TEXT_NODE) activeLogNode.appendData(part);
+    else activeLogNode.append(document.createTextNode(part));
+    activeLogNodeLength += part.length;
+    logRenderedLength += part.length;
+    logEntries[logEntries.length - 1].length += part.length;
+    offset = end;
+  }
+}
+
+function trimVisibleLog() {
+  while (logRenderedLength > logVisibleCharLimit && logEntries.length > 1) {
+    const oldest = logEntries.shift();
+    oldest.node.remove();
+    logRenderedLength -= oldest.length;
+  }
+}
+
+function appendLogText(text) {
+  const ansi = /\u001b\[([0-9;]*)m|\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g;
+  let offset = 0;
+  let match;
+  while ((match = ansi.exec(text)) !== null) {
+    if (match.index > offset) {
+      appendStyledLogText(text.slice(offset, match.index), currentLogStyle());
+    }
+    if (match[1] !== undefined) applyAnsiStyle(match[1]);
+    offset = ansi.lastIndex;
+  }
+  if (offset < text.length) appendStyledLogText(text.slice(offset), currentLogStyle());
+  trimVisibleLog();
+}
+
+function flushLogOutput() {
+  const batch = takeLogBatch(logFlushCharLimit);
+  if (batch) {
+    appendLogText(batch);
+    if (followLogOutput) log.scrollTop = log.scrollHeight;
+  }
+  if (logQueueHead < logQueue.length) {
+    setTimeout(flushLogOutput, logFlushIntervalMs);
+  } else {
+    logFlushScheduled = false;
+  }
+}
+
+function clearLogOutput() {
+  logQueue.length = 0;
+  logQueueHead = 0;
+  logQueueOffset = 0;
+  log.replaceChildren();
+  activeLogNode = undefined;
+  activeLogNodeLength = 0;
+  activeLogNodeStyle = '';
+  logEntries = [];
+  logRenderedLength = 0;
+  resetLogStyle();
+  followLogOutput = true;
+}
+
+log.addEventListener('scroll', () => {
+  followLogOutput = log.scrollHeight - log.scrollTop - log.clientHeight < 16;
+});
 
 async function getState() {
   return invoke('get_manager_state');
@@ -46,7 +232,7 @@ function updateLaunchSummary() {
   }
 
   summary.textContent = `${mode.toUpperCase()} · ${selected.dataset.title} · ${selected.value}`;
-  launch.disabled = false;
+  launch.disabled = active;
 }
 
 async function persistManagerState(updates = {}) {
@@ -231,11 +417,31 @@ await listen('installer-finished', (event) => {
     : `\n\nОперация завершилась с ошибкой (код ${exitCode}).\n`);
 });
 
+await listen('dev-setup-finished', async (event) => {
+  const { success, message } = event.payload;
+  setBusy(false, success ? 'Dev запущен' : 'Ошибка Dev');
+  hint.textContent = success
+    ? 'Подготовка завершена; вывод Dev появится в журнале'
+    : 'Проверьте журнал и установку требуемых инструментов';
+  appendOutput(`\n${message}\n`);
+  if (success) await checkPrerequisites();
+});
+
+await listen('dev-process-finished', (event) => {
+  const { success, exitCode, error } = event.payload;
+  const label = success ? 'Dev завершён' : `Ошибка Dev (${exitCode})`;
+  status.textContent = label;
+  status.dataset.state = success ? 'idle' : 'error';
+  appendOutput(error
+    ? `\nПроцесс Dev не смог завершиться корректно: ${error}\n`
+    : `\nПроцесс Dev завершился с кодом ${exitCode}.\n`);
+});
+
 for (const button of installerButtons) {
   button.addEventListener('click', async () => {
     if (active) return;
     const action = button.dataset.action;
-    log.textContent = '';
+    clearLogOutput();
     hint.textContent = action === 'winget'
       ? 'Подготовка App Installer'
       : 'Подготовка Microsoft Store';
@@ -307,6 +513,8 @@ document.querySelector('#prepare-release').addEventListener('click', async () =>
 });
 
 document.querySelector('#launch').addEventListener('click', async () => {
+  const isDev = selectedMode() === 'dev';
+  if (isDev) setBusy(true, 'Подготовка Dev');
   try {
     if (!document.querySelector('#installed-versions input[name="installed-version"]:checked')) {
       throw new Error('Сначала выберите установленную версию.');
@@ -314,12 +522,23 @@ document.querySelector('#launch').addEventListener('click', async () => {
     await saveState();
     const message = await invoke('launch_omniscience');
     appendOutput(`\n${message}\n`);
+    if (!isDev) setBusy(false);
   } catch (error) {
+    setBusy(false, 'Ошибка запуска');
     appendOutput(`\nНе удалось запустить: ${String(error)}\n`);
   }
 });
 
 managerState = await getState();
+try {
+  const outputLogPath = await invoke('get_output_log_path');
+  document.querySelector('#log-file-path').textContent =
+    `Полный вывод сохраняется в ${outputLogPath}; здесь показана последняя часть журнала.`;
+  document.querySelector('#log-file-path').title = outputLogPath;
+} catch (error) {
+  document.querySelector('#log-file-path').textContent =
+    `Не удалось получить путь к полному журналу: ${String(error)}`;
+}
 document.querySelector(`input[name="mode"][value="${managerState.mode === 'dev' ? 'dev' : 'prod'}"]`).checked = true;
 document.querySelector('#drive-letter').value = managerState.driveLetter || 'C';
 document.querySelector('#github-url').value = managerState.browserUrl || 'https://github.com/EssenceOfDream/The_Omniscience/releases';

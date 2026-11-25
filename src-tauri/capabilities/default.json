@@ -7,6 +7,7 @@
     "core:default",
     "allow-start-install",
     "allow-get-manager-state",
+    "allow-get-output-log-path",
     "allow-set-manager-state",
     "allow-list-installed-versions",
     "allow-check-prerequisites",

@@ -29,7 +29,8 @@ body {
 
 .header,
 .action-card,
-.log-heading {
+.log-heading,
+.log-meta {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -362,8 +363,10 @@ button.small {
 
 .log-section {
   display: flex;
-  min-height: 250px;
-  flex: 1;
+  width: 100%;
+  height: 280px;
+  min-height: 280px;
+  flex: 0 0 280px;
   flex-direction: column;
   overflow: hidden;
   border: 1px solid #2b3140;
@@ -381,13 +384,33 @@ button.small {
   margin: 0;
 }
 
-#log-hint {
+.log-meta {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  min-width: 0;
   text-align: right;
+}
+
+#log-hint,
+#log-file-path {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+  white-space: nowrap;
+}
+
+#log-file-path {
+  color: #707b8d;
+  font-size: 10px;
 }
 
 #log {
   flex: 1;
+  min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
   margin: 0;
   padding: 15px;
   color: #c5d0df;
@@ -397,6 +420,56 @@ button.small {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.ansi-bold {
+  font-weight: 700;
+}
+
+.ansi-dim {
+  opacity: 0.72;
+}
+
+.ansi-italic {
+  font-style: italic;
+}
+
+.ansi-underline {
+  text-decoration: underline;
+}
+
+.ansi-fg-30 { color: #484f58; }
+.ansi-fg-31 { color: #ff7b72; }
+.ansi-fg-32 { color: #3fb950; }
+.ansi-fg-33 { color: #d29922; }
+.ansi-fg-34 { color: #58a6ff; }
+.ansi-fg-35 { color: #bc8cff; }
+.ansi-fg-36 { color: #39c5cf; }
+.ansi-fg-37 { color: #b1bac4; }
+.ansi-fg-90 { color: #6e7681; }
+.ansi-fg-91 { color: #ffa198; }
+.ansi-fg-92 { color: #56d364; }
+.ansi-fg-93 { color: #e3b341; }
+.ansi-fg-94 { color: #79c0ff; }
+.ansi-fg-95 { color: #d2a8ff; }
+.ansi-fg-96 { color: #56d4dd; }
+.ansi-fg-97 { color: #f0f6fc; }
+
+.ansi-bg-40 { background-color: #484f58; }
+.ansi-bg-41 { background-color: #ff7b72; }
+.ansi-bg-42 { background-color: #3fb950; }
+.ansi-bg-43 { background-color: #d29922; }
+.ansi-bg-44 { background-color: #58a6ff; }
+.ansi-bg-45 { background-color: #bc8cff; }
+.ansi-bg-46 { background-color: #39c5cf; }
+.ansi-bg-47 { background-color: #b1bac4; }
+.ansi-bg-100 { background-color: #6e7681; }
+.ansi-bg-101 { background-color: #ffa198; }
+.ansi-bg-102 { background-color: #56d364; }
+.ansi-bg-103 { background-color: #e3b341; }
+.ansi-bg-104 { background-color: #79c0ff; }
+.ansi-bg-105 { background-color: #d2a8ff; }
+.ansi-bg-106 { background-color: #56d4dd; }
+.ansi-bg-107 { background-color: #f0f6fc; }
 
 .notice {
   margin: -12px 0 0;

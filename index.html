@@ -49,7 +49,7 @@
           <div class="panel-heading">
             <div>
               <h2>Режим запуска</h2>
-              <p>Выберите режим, затем установленную версию для запуска.</p>
+              <p>Dev проверит Node.js и Rust/MSVC, установит недостающее и выполнит npm install.</p>
             </div>
           </div>
           <div class="mode-options">
@@ -118,9 +118,12 @@
       <section class="log-section" aria-label="Ход установки">
         <div class="log-heading">
           <h2>Журнал установки</h2>
-          <span id="log-hint">Выберите действие выше</span>
+          <div class="log-meta">
+            <span id="log-hint">Выберите действие выше</span>
+            <span id="log-file-path">Загрузка пути к полному журналу…</span>
+          </div>
         </div>
-        <pre id="log" role="log" aria-live="polite">Операции ничего не загружают из сети. Установка запускается только после нажатия кнопки.</pre>
+        <pre id="log" role="log" aria-live="polite"></pre>
       </section>
       <p class="notice">Не закрывайте приложение до завершения операции. Ввод команд отключён.</p>
     </main>

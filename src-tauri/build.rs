@@ -3,6 +3,7 @@ fn main() {
         .app_manifest(tauri_build::AppManifest::new().commands(&[
             "start_install",
             "get_manager_state",
+            "get_output_log_path",
             "set_manager_state",
             "list_installed_versions",
             "check_prerequisites",

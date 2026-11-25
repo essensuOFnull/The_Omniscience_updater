@@ -1,10 +1,18 @@
 use std::{
-    fs,
-    io::{BufRead, BufReader},
+    env,
+    fs::{self, OpenOptions},
+    io::{BufRead, BufReader, Read, Write},
+    net::TcpListener,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Arc, atomic::{AtomicBool, Ordering}},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+        OnceLock,
+    },
     thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
@@ -101,7 +109,43 @@ fn project_root() -> Result<PathBuf, String> {
 }
 
 fn emit_output(app: &AppHandle, text: String) {
+    let text = match append_output_log(app, &text) {
+        Ok(()) => text,
+        Err(error) => format!("{text}\n[Не удалось сохранить полный журнал: {error}]\n"),
+    };
     let _ = app.emit("installer-output", serde_json::json!({ "text": text }));
+}
+
+fn output_log_path(app: &AppHandle) -> Result<PathBuf, String> {
+    static SESSION_TIMESTAMP: OnceLock<u128> = OnceLock::new();
+    let timestamp = SESSION_TIMESTAMP.get_or_init(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    });
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Не удалось определить каталог данных приложения: {error}"))?
+        .join("logs");
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("Не удалось создать каталог журнала: {error}"))?;
+    Ok(directory.join(format!(
+        "updater-output-{}-{timestamp}.log",
+        std::process::id()
+    )))
+}
+
+fn append_output_log(app: &AppHandle, text: &str) -> Result<(), String> {
+    let path = output_log_path(app)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|error| format!("Не удалось открыть {}: {error}", path.display()))?;
+    file.write_all(text.as_bytes())
+        .map_err(|error| format!("Не удалось записать {}: {error}", path.display()))
 }
 
 fn emit_installed_version_changed(app: &AppHandle) -> Result<(), String> {
@@ -638,6 +682,11 @@ fn get_manager_state(app: AppHandle) -> ManagerState {
 }
 
 #[tauri::command]
+fn get_output_log_path(app: AppHandle) -> Result<String, String> {
+    output_log_path(&app).map(|path| path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 fn list_installed_versions(app: AppHandle, mode: String) -> Result<Vec<InstalledVersion>, String> {
     let state = load_state(&app);
     let root = installation_base(&state.drive_letter)?;
@@ -873,23 +922,497 @@ fn check_latest_release() -> ReleaseStatus {
 }
 
 #[tauri::command]
-fn launch_omniscience(app: AppHandle) -> Result<String, String> {
+fn find_executable_on_path(name: &str) -> Option<PathBuf> {
+    env::var_os("PATH")
+        .into_iter()
+        .flat_map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
+        .map(|directory| directory.join(name))
+        .find(|path| path.is_file())
+}
+
+fn node_is_compatible(version: &str) -> bool {
+    let version = version.trim().trim_start_matches('v');
+    let mut parts = version.split('.').filter_map(|part| part.parse::<u64>().ok());
+    let (Some(major), Some(minor)) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    major > 22 || (major == 22 && minor >= 12) || (major == 20 && minor >= 19)
+}
+
+fn node_installation() -> Option<(PathBuf, PathBuf)> {
+    let mut candidates = Vec::new();
+    if let Some(node) = find_executable_on_path(if cfg!(windows) { "node.exe" } else { "node" }) {
+        candidates.push(node);
+    }
+    if cfg!(windows) {
+        if let Some(program_files) = env::var_os("ProgramFiles") {
+            candidates.push(PathBuf::from(program_files).join("nodejs").join("node.exe"));
+        }
+        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+            candidates.push(
+                PathBuf::from(local_app_data)
+                    .join("Programs")
+                    .join("nodejs")
+                    .join("node.exe"),
+            );
+        }
+    }
+
+    candidates.into_iter().find_map(|node| {
+        if !node.is_file() {
+            return None;
+        }
+        let npm_cli = node
+            .parent()?
+            .join("node_modules")
+            .join("npm")
+            .join("bin")
+            .join("npm-cli.js");
+        npm_cli.is_file().then_some((node, npm_cli))
+    })
+}
+
+fn node_installation_is_compatible(installation: Option<&(PathBuf, PathBuf)>) -> bool {
+    installation
+        .and_then(|(node, _)| {
+            Command::new(node)
+                .arg("--version")
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| node_is_compatible(&String::from_utf8_lossy(&output.stdout)))
+        })
+        .unwrap_or(false)
+}
+
+fn prepend_to_path(path: &Path, current: Option<&std::ffi::OsStr>) -> Result<std::ffi::OsString, String> {
+    let mut paths = vec![path.to_path_buf()];
+    if let Some(current) = current {
+        paths.extend(env::split_paths(current));
+    } else if let Some(current) = env::var_os("PATH") {
+        paths.extend(env::split_paths(&current));
+    }
+    env::join_paths(paths).map_err(|error| format!("Не удалось обновить PATH процесса: {error}"))
+}
+
+fn stream_child_output<R: Read + Send + 'static>(app: AppHandle, reader: R) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let (sender, receiver) = mpsc::sync_channel(256);
+        thread::spawn(move || {
+            for line in BufReader::new(reader).lines() {
+                match line {
+                    Ok(line) => {
+                        if sender.send(format!("{line}\n")).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = sender.send(format!("\nОшибка чтения вывода процесса: {error}\n"));
+                        break;
+                    }
+                }
+            }
+        });
+
+        let mut batch = String::new();
+        let flush_interval = Duration::from_millis(50);
+        let mut flush_at = Instant::now() + flush_interval;
+        loop {
+            if Instant::now() >= flush_at {
+                if !batch.is_empty() {
+                    emit_output(&app, std::mem::take(&mut batch));
+                }
+                flush_at = Instant::now() + flush_interval;
+                continue;
+            }
+
+            match receiver.recv_timeout(flush_at.saturating_duration_since(Instant::now())) {
+                Ok(text) => {
+                    batch.push_str(&text);
+                    if batch.len() >= 65536 {
+                        thread::sleep(flush_at.saturating_duration_since(Instant::now()));
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    if !batch.is_empty() {
+                        emit_output(&app, batch);
+                    }
+                    break;
+                }
+            }
+        }
+    })
+}
+
+fn run_logged_command(
+    app: &AppHandle,
+    program: &Path,
+    args: &[&str],
+    current_dir: Option<&Path>,
+    path: Option<&std::ffi::OsStr>,
+    description: &str,
+) -> Result<(), String> {
+    emit_output(app, format!("\n{description}…\n"));
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(directory) = current_dir {
+        command.current_dir(directory);
+    }
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    run_logged_process(app, command, description)
+}
+
+fn run_logged_process(
+    app: &AppHandle,
+    mut command: Command,
+    description: &str,
+) -> Result<(), String> {
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Не удалось запустить {description}: {error}"))?;
+    let stdout_reader = child
+        .stdout
+        .take()
+        .map(|stdout| stream_child_output(app.clone(), stdout));
+    let stderr_reader = child
+        .stderr
+        .take()
+        .map(|stderr| stream_child_output(app.clone(), stderr));
+    let status = child
+        .wait()
+        .map_err(|error| format!("Не удалось дождаться завершения {description}: {error}"))?;
+    if let Some(reader) = stdout_reader {
+        let _ = reader.join();
+    }
+    if let Some(reader) = stderr_reader {
+        let _ = reader.join();
+    }
+    if !status.success() {
+        return Err(format!("{description} завершился с кодом {}.", status.code().unwrap_or(1)));
+    }
+    Ok(())
+}
+
+fn winget_executable() -> Option<PathBuf> {
+    find_executable_on_path(if cfg!(windows) { "winget.exe" } else { "winget" }).or_else(|| {
+        env::var_os("LOCALAPPDATA").map(|local_app_data| {
+            PathBuf::from(local_app_data)
+                .join("Microsoft")
+                .join("WindowsApps")
+                .join("winget.exe")
+        }).filter(|path| path.is_file())
+    })
+}
+
+fn ensure_node(app: &AppHandle) -> Result<(PathBuf, PathBuf, std::ffi::OsString), String> {
+    let mut installation = node_installation();
+    if !node_installation_is_compatible(installation.as_ref()) {
+        let winget = winget_executable()
+            .ok_or_else(|| "Для установки Node.js требуется winget (App Installer).".to_string())?;
+        if installation.is_some() {
+            run_logged_command(
+                app,
+                &winget,
+                &[
+                    "upgrade",
+                    "--id",
+                    "OpenJS.NodeJS.LTS",
+                    "--exact",
+                    "--silent",
+                    "--accept-package-agreements",
+                    "--accept-source-agreements",
+                ],
+                None,
+                None,
+                "Обновление Node.js LTS через winget",
+            )?;
+            installation = node_installation();
+        } else {
+            run_logged_command(
+                app,
+                &winget,
+                &[
+                    "install",
+                    "--id",
+                    "OpenJS.NodeJS.LTS",
+                    "--exact",
+                    "--silent",
+                    "--accept-package-agreements",
+                    "--accept-source-agreements",
+                ],
+                None,
+                None,
+                "Установка совместимого Node.js LTS через winget",
+            )?;
+            installation = node_installation();
+        }
+    }
+
+    if !node_installation_is_compatible(installation.as_ref()) {
+        return Err(
+            "Не удалось установить совместимый Node.js LTS (нужен 20.19+ или 22.12+)."
+                .to_string(),
+        );
+    }
+
+    let (node, npm_cli) = installation
+        .ok_or_else(|| "Node.js установлен, но node.exe или npm-cli.js не найден.".to_string())?;
+    let version = Command::new(&node)
+        .arg("--version")
+        .output()
+        .map_err(|error| format!("Не удалось проверить Node.js: {error}"))?;
+    if !version.status.success() {
+        return Err("Не удалось получить версию Node.js.".to_string());
+    }
+    let version = String::from_utf8_lossy(&version.stdout);
+    if !node_is_compatible(&version) {
+        return Err(format!(
+            "Node.js {version} несовместим с Vite 8 (требуется 20.19+ или 22.12+)."
+        ));
+    }
+    let node_directory = node
+        .parent()
+        .ok_or_else(|| "Не удалось определить каталог node.exe.".to_string())?;
+    let path = prepend_to_path(node_directory, None)?;
+    Ok((node, npm_cli, path))
+}
+
+fn visual_cpp_tools_installed() -> bool {
+    let program_files_x86 = env::var_os("ProgramFiles(x86)")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Program Files (x86)"));
+    let vswhere = program_files_x86.join("Microsoft Visual Studio").join("Installer").join("vswhere.exe");
+    if !vswhere.is_file() {
+        return false;
+    }
+    Command::new(vswhere)
+        .args([
+            "-latest",
+            "-products",
+            "*",
+            "-requires",
+            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            "-property",
+            "installationPath",
+        ])
+        .output()
+        .map(|output| output.status.success() && !output.stdout.is_empty())
+        .unwrap_or(false)
+}
+
+fn ensure_dev_toolchain(
+    app: &AppHandle,
+    path: &std::ffi::OsStr,
+) -> Result<std::ffi::OsString, String> {
+    let cargo_bin = env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .unwrap_or_default()
+        .join(".cargo")
+        .join("bin");
+    let rustup = find_executable_on_path(if cfg!(windows) { "rustup.exe" } else { "rustup" })
+        .or_else(|| {
+            let candidate = cargo_bin.join(if cfg!(windows) { "rustup.exe" } else { "rustup" });
+            candidate.is_file().then_some(candidate)
+        });
+
+    let rustup = if let Some(rustup) = rustup {
+        rustup
+    } else {
+        let winget = winget_executable()
+            .ok_or_else(|| "Для установки Rust требуется winget (App Installer).".to_string())?;
+        run_logged_command(
+            app,
+            &winget,
+            &[
+                "install",
+                "--id",
+                "Rustlang.Rustup",
+                "--exact",
+                "--silent",
+                "--accept-package-agreements",
+                "--accept-source-agreements",
+            ],
+            None,
+            Some(path),
+            "Установка rustup через winget",
+        )?;
+        let candidate = cargo_bin.join(if cfg!(windows) { "rustup.exe" } else { "rustup" });
+        if !candidate.is_file() {
+            return Err("Rustup установлен, но rustup.exe не найден.".to_string());
+        }
+        candidate
+    };
+
+    run_logged_command(
+        app,
+        &rustup,
+        &["toolchain", "install", "stable-x86_64-pc-windows-msvc"],
+        None,
+        Some(path),
+        "Подготовка Rust stable MSVC",
+    )?;
+    run_logged_command(
+        app,
+        &rustup,
+        &["default", "stable-x86_64-pc-windows-msvc"],
+        None,
+        Some(path),
+        "Выбор toolchain Rust MSVC",
+    )?;
+
+    if !visual_cpp_tools_installed() {
+        let winget = winget_executable()
+            .ok_or_else(|| "Для установки C++ Build Tools требуется winget.".to_string())?;
+        run_logged_command(
+            app,
+            &winget,
+            &[
+                "install",
+                "--id",
+                "Microsoft.VisualStudio.2022.BuildTools",
+                "--exact",
+                "--silent",
+                "--accept-package-agreements",
+                "--accept-source-agreements",
+                "--override",
+                "--wait --quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended",
+            ],
+            None,
+            Some(path),
+            "Установка Visual C++ Build Tools и Windows SDK через winget",
+        )?;
+        if !visual_cpp_tools_installed() {
+            return Err("Установка завершилась, но MSVC Build Tools не обнаружены.".to_string());
+        }
+    }
+    prepend_to_path(&cargo_bin, Some(path))
+}
+
+fn launch_dev(app: &AppHandle, directory: &Path) -> Result<(), String> {
+    if !directory.join("package.json").is_file() {
+        return Err("Dev-режим требует каталог исходников с package.json.".to_string());
+    }
+
+    let (node, npm_cli, path) = ensure_node(app)?;
+    let path = ensure_dev_toolchain(app, &path)?;
+    let mut npm_install = Command::new(&node);
+    npm_install
+        .arg(&npm_cli)
+        .args(["install", "--no-audit", "--no-fund"])
+        .current_dir(directory)
+        .env("PATH", &path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    run_logged_process(app, npm_install, "Установка npm-зависимостей (npm install)")?;
+
+    let port = TcpListener::bind(("127.0.0.1", 0))
+        .and_then(|listener| listener.local_addr())
+        .map_err(|error| format!("Не удалось выделить порт для Omniscience Dev: {error}"))?
+        .port();
+    let tauri_config = tauri_dev_config(port).to_string();
+
+    emit_output(
+        app,
+        format!(
+            "\nЗапуск Omniscience Dev на порту {port} (updater использует 22869)…\n"
+        ),
+    );
+    let mut child = Command::new(&node)
+        .arg(&npm_cli)
+        .args(["run", "tauri", "dev"])
+        .current_dir(directory)
+        .env("PATH", &path)
+        .env("TAURI_CONFIG", tauri_config)
+        .env("CARGO_BUILD_JOBS", "1")
+        .env("CARGO_INCREMENTAL", "0")
+        .env("CARGO_TERM_COLOR", "always")
+        .env("CARGO_TERM_PROGRESS_WHEN", "never")
+        .env("FORCE_COLOR", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Не удалось запустить Tauri Dev: {error}"))?;
+    if let Some(stdout) = child.stdout.take() {
+        stream_child_output(app.clone(), stdout);
+    }
+    if let Some(stderr) = child.stderr.take() {
+        stream_child_output(app.clone(), stderr);
+    }
+    let app_handle = app.clone();
+    thread::spawn(move || match child.wait() {
+        Ok(status) => {
+            let _ = app_handle.emit(
+                "dev-process-finished",
+                serde_json::json!({
+                    "success": status.success(),
+                    "exitCode": status.code().unwrap_or(1),
+                }),
+            );
+        }
+        Err(error) => {
+            let _ = app_handle.emit(
+                "dev-process-finished",
+                serde_json::json!({
+                    "success": false,
+                    "exitCode": 1,
+                    "error": error.to_string(),
+                }),
+            );
+        }
+    });
+    emit_output(app, "Команда npm run tauri dev запущена.\n".to_string());
+    Ok(())
+}
+
+fn tauri_dev_config(port: u16) -> Value {
+    serde_json::json!({
+        "build": {
+            "devUrl": format!("http://127.0.0.1:{port}"),
+            "beforeDevCommand": format!(
+                "npm run build:project && npm run preview -- --host 127.0.0.1 --port {port} --strictPort"
+            )
+        }
+    })
+}
+
+#[tauri::command]
+fn launch_omniscience(
+    app: AppHandle,
+    installer_state: State<'_, InstallerState>,
+) -> Result<String, String> {
     let state = load_state(&app);
     if state.mode == "dev" {
         let directory = PathBuf::from(state.source_directory);
-        if !directory.join("package.json").is_file() {
-            return Err("Dev-режим требует каталог исходников с package.json.".to_string());
+        let running = installer_state.running.clone();
+        if running.swap(true, Ordering::AcqRel) {
+            return Err("Подготовка или установка уже выполняется.".to_string());
         }
-        let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
-        Command::new(npm)
-            .args(["run", "tauri", "dev"])
-            .current_dir(directory)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| format!("Не удалось запустить Dev: {error}"))?;
-        Ok("Dev-запуск инициирован.".to_string())
+        let app_handle = app.clone();
+        thread::spawn(move || {
+            let result = launch_dev(&app_handle, &directory);
+            running.store(false, Ordering::Release);
+            let (success, message) = match result {
+                Ok(()) => (true, "Dev запущен.".to_string()),
+                Err(error) => (false, error),
+            };
+            let _ = app_handle.emit(
+                "dev-setup-finished",
+                serde_json::json!({ "success": success, "message": message }),
+            );
+            if !success {
+                emit_output(&app_handle, format!("\nОшибка подготовки Dev: {message}\n"));
+            }
+        });
+        Ok("Подготовка Dev запущена; следите за этапами в журнале.".to_string())
     } else {
         let executable = PathBuf::from(state.production_executable);
         if !executable.is_file() {
@@ -1034,6 +1557,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_install,
             get_manager_state,
+            get_output_log_path,
             set_manager_state,
             list_installed_versions,
             check_prerequisites,
@@ -1053,7 +1577,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::scan_installed_versions;
+    use super::{node_is_compatible, scan_installed_versions, tauri_dev_config};
     use std::{
         fs,
         path::PathBuf,
@@ -1106,6 +1630,27 @@ mod tests {
         assert_eq!(
             prod_versions[0].path,
             prod.join("app.exe").to_string_lossy().to_string()
+        );
+    }
+
+    #[test]
+    fn node_version_check_matches_vite_8_requirements() {
+        assert!(node_is_compatible("v20.19.0"));
+        assert!(node_is_compatible("v22.12.0"));
+        assert!(node_is_compatible("v24.0.0"));
+        assert!(!node_is_compatible("v20.18.1"));
+        assert!(!node_is_compatible("v22.11.0"));
+        assert!(!node_is_compatible("v21.7.0"));
+        assert!(!node_is_compatible("unknown"));
+    }
+
+    #[test]
+    fn tauri_dev_config_uses_the_same_dynamic_preview_port() {
+        let config = tauri_dev_config(23456);
+        assert_eq!(config["build"]["devUrl"], "http://127.0.0.1:23456");
+        assert_eq!(
+            config["build"]["beforeDevCommand"],
+            "npm run build:project && npm run preview -- --host 127.0.0.1 --port 23456 --strictPort"
         );
     }
 }
