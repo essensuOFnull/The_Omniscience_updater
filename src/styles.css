@@ -261,6 +261,8 @@ h2 {
 }
 
 .launch-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   border: 1px solid #4b4279;
   border-radius: 12px;
   padding: 16px 18px;
@@ -269,6 +271,7 @@ h2 {
 
 .launch-buttons {
   display: flex;
+  min-width: 0;
   flex-wrap: wrap;
   gap: 8px;
 }

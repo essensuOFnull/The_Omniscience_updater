@@ -8,6 +8,7 @@ const status = document.querySelector('#status');
 const hint = document.querySelector('#log-hint');
 const installerButtons = [...document.querySelectorAll('button[data-action]')];
 const stopOmniscienceButton = document.querySelector('#stop-omniscience');
+const startupButton = document.querySelector('#add-omniscience-startup');
 const logQueue = [];
 const logFlushIntervalMs = 50;
 const logFlushCharLimit = 65536;
@@ -37,6 +38,7 @@ function setBusy(isBusy, label = 'Готово') {
   active = isBusy;
   for (const button of installerButtons) button.disabled = isBusy;
   stopOmniscienceButton.disabled = isBusy;
+  startupButton.disabled = isBusy;
   document.querySelector('#launch').disabled = isBusy;
   status.textContent = isBusy ? 'Выполняется…' : label;
   status.dataset.state = isBusy ? 'busy' : label === 'Готово' ? 'idle' : 'error';
@@ -234,6 +236,7 @@ function updateLaunchSummary() {
   const mode = selectedMode();
   const selected = document.querySelector('#installed-versions input[name="installed-version"]:checked');
   const launch = document.querySelector('#launch');
+  startupButton.disabled = active || !selected || selected.dataset.mode !== mode;
   const summary = document.querySelector('#launch-summary');
   if (!selected || selected.dataset.mode !== mode) {
     summary.textContent = `${mode.toUpperCase()} · выберите установленную версию`;
@@ -529,6 +532,21 @@ stopOmniscienceButton.addEventListener('click', async () => {
   } catch (error) {
     setBusy(false, 'Ошибка завершения');
     appendOutput(`\nНе удалось завершить Omniscience: ${String(error)}\n`);
+  }
+});
+
+startupButton.addEventListener('click', async () => {
+  if (active) return;
+  scrollToLog();
+  setBusy(true, 'Добавление в автозагрузку');
+  try {
+    await saveState();
+    const message = await invoke('add_omniscience_to_startup');
+    appendOutput(`\n${message}\n`);
+    setBusy(false);
+  } catch (error) {
+    setBusy(false, 'Ошибка автозагрузки');
+    appendOutput(`\nНе удалось добавить Omniscience в автозагрузку: ${String(error)}\n`);
   }
 });
 

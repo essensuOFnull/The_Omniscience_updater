@@ -7,10 +7,9 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
         mpsc,
-        OnceLock,
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -155,7 +154,9 @@ fn emit_installed_version_changed(app: &AppHandle) -> Result<(), String> {
 }
 
 fn state_file(app: &AppHandle) -> Result<PathBuf, String> {
-    let directory = app.path().app_data_dir()
+    let directory = app
+        .path()
+        .app_data_dir()
         .map_err(|error| format!("Could not resolve application data directory: {error}"))?;
     fs::create_dir_all(&directory)
         .map_err(|error| format!("Could not create application data directory: {error}"))?;
@@ -177,8 +178,7 @@ fn save_state(app: &AppHandle, state: &ManagerState) -> Result<(), String> {
     let path = state_file(app)?;
     let text = serde_json::to_string_pretty(state)
         .map_err(|error| format!("Could not serialize manager state: {error}"))?;
-    fs::write(path, text)
-        .map_err(|error| format!("Could not save manager state: {error}"))
+    fs::write(path, text).map_err(|error| format!("Could not save manager state: {error}"))
 }
 
 fn sanitize_path_component(value: &str) -> Result<String, String> {
@@ -189,13 +189,16 @@ fn sanitize_path_component(value: &str) -> Result<String, String> {
     if value == "." || value == ".." || value.contains(['/', '\\', ':']) {
         return Err(format!("Недопустимый компонент пути: {value}"));
     }
-    let sanitized: String = value.chars().map(|character| {
-        if character.is_ascii_control() || ['<', '>', '"', '|', '?', '*'].contains(&character) {
-            '_'
-        } else {
-            character
-        }
-    }).collect();
+    let sanitized: String = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_control() || ['<', '>', '"', '|', '?', '*'].contains(&character) {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect();
     if sanitized.trim_matches([' ', '.']).is_empty() {
         return Err(format!("Недопустимый компонент пути: {value}"));
     }
@@ -204,7 +207,11 @@ fn sanitize_path_component(value: &str) -> Result<String, String> {
 
 fn installation_base(drive_letter: &str) -> Result<PathBuf, String> {
     let drive = drive_letter.trim();
-    if drive.len() != 1 || !drive.chars().all(|character| character.is_ascii_alphabetic()) {
+    if drive.len() != 1
+        || !drive
+            .chars()
+            .all(|character| character.is_ascii_alphabetic())
+    {
         return Err("Выберите букву диска от A до Z.".to_string());
     }
     Ok(PathBuf::from(format!(
@@ -279,11 +286,23 @@ fn scan_installed_versions(root: &Path, mode: &str) -> Result<Vec<InstalledVersi
 
     let mut installed = Vec::new();
     for owner_path in immediate_directories(root)? {
-        let owner = owner_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let owner = owner_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         for repo_path in immediate_directories(&owner_path)? {
-            let repo = repo_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let repo = repo_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
             for tag_path in immediate_directories(&repo_path)? {
-                let tag = tag_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                let tag = tag_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
                 let install_path = tag_path.join(mode);
                 if !path_is_directory(&install_path)? {
                     continue;
@@ -319,11 +338,9 @@ fn scan_installed_versions(root: &Path, mode: &str) -> Result<Vec<InstalledVersi
                     {
                         continue;
                     }
-                    if entry
-                        .path()
-                        .extension()
-                        .is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("exe"))
-                    {
+                    if entry.path().extension().is_some_and(|extension| {
+                        extension.to_string_lossy().eq_ignore_ascii_case("exe")
+                    }) {
                         installed.push(InstalledVersion {
                             mode: mode.to_string(),
                             owner: owner.clone(),
@@ -337,19 +354,32 @@ fn scan_installed_versions(root: &Path, mode: &str) -> Result<Vec<InstalledVersi
         }
     }
     installed.sort_by(|left, right| {
-        (&left.owner, &left.repo, &left.tag, &left.path)
-            .cmp(&(&right.owner, &right.repo, &right.tag, &right.path))
+        (&left.owner, &left.repo, &left.tag, &left.path).cmp(&(
+            &right.owner,
+            &right.repo,
+            &right.tag,
+            &right.path,
+        ))
     });
     Ok(installed)
 }
 
-fn run_capture(program: &Path, args: &[&str], current_dir: Option<&Path>) -> Result<(bool, i32, String), String> {
+fn run_capture(
+    program: &Path,
+    args: &[&str],
+    current_dir: Option<&Path>,
+) -> Result<(bool, i32, String), String> {
     let mut command = Command::new(program);
-    command.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     if let Some(directory) = current_dir {
         command.current_dir(directory);
     }
-    let output = command.output()
+    let output = command
+        .output()
         .map_err(|error| format!("Could not start {}: {error}", program.display()))?;
     let exit_code = output.status.code().unwrap_or(1);
     let mut text = String::from_utf8_lossy(&output.stdout).to_string();
@@ -508,7 +538,10 @@ async fn open_github_browser(app: AppHandle, url: String) -> Result<String, Stri
     state.browser_url = parsed.to_string();
     save_state(&app, &state)?;
 
-    let window = match (app.get_window("github-browser"), app.get_webview("github-browser")) {
+    let window = match (
+        app.get_window("github-browser"),
+        app.get_webview("github-browser"),
+    ) {
         (Some(window), Some(webview)) => {
             webview
                 .navigate(parsed.clone())
@@ -594,7 +627,15 @@ fn open_github_devtools(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn install_github_artifact(app: AppHandle, owner: String, repo: String, tag: String, mode: String, asset_url: String, asset_name: String) -> Result<String, String> {
+fn install_github_artifact(
+    app: AppHandle,
+    owner: String,
+    repo: String,
+    tag: String,
+    mode: String,
+    asset_url: String,
+    asset_name: String,
+) -> Result<String, String> {
     let owner = sanitize_path_component(&owner)?;
     let repo = sanitize_path_component(&repo)?;
     let tag = sanitize_path_component(&tag)?;
@@ -608,28 +649,61 @@ fn install_github_artifact(app: AppHandle, owner: String, repo: String, tag: Str
 
     if mode == "dev" {
         if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent).map_err(|error| format!("Не удалось создать каталог: {error}"))?;
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("Не удалось создать каталог: {error}"))?;
         }
         if destination.join(".git").is_dir() {
             let git = PathBuf::from("git");
             let directory = destination.to_string_lossy();
-            let status = run_capture(&git, &["-C", &directory, "status", "--porcelain", "--untracked-files=no"], None)?;
+            let status = run_capture(
+                &git,
+                &[
+                    "-C",
+                    &directory,
+                    "status",
+                    "--porcelain",
+                    "--untracked-files=no",
+                ],
+                None,
+            )?;
             if status.0 && !status.2.trim().is_empty() {
                 return Err("Dev-копия содержит изменения. Она не была сброшена.".to_string());
             }
-            run_capture(&git, &["-C", &directory, "fetch", "--tags", "--prune", "origin"], None)?;
-            let checkout = run_capture(&git, &["-C", &directory, "checkout", "--detach", &tag], None)?;
+            run_capture(
+                &git,
+                &["-C", &directory, "fetch", "--tags", "--prune", "origin"],
+                None,
+            )?;
+            let checkout = run_capture(
+                &git,
+                &["-C", &directory, "checkout", "--detach", &tag],
+                None,
+            )?;
             if !checkout.0 {
-                return Err(format!("Не удалось переключиться на tag {tag}: {}", checkout.2));
+                return Err(format!(
+                    "Не удалось переключиться на tag {tag}: {}",
+                    checkout.2
+                ));
             }
         } else {
-            if destination.exists() && fs::read_dir(&destination).map(|mut entries| entries.next().is_some()).unwrap_or(false) {
+            if destination.exists()
+                && fs::read_dir(&destination)
+                    .map(|mut entries| entries.next().is_some())
+                    .unwrap_or(false)
+            {
                 return Err(format!("Каталог Dev не пуст: {}", destination.display()));
             }
             let git = PathBuf::from("git");
             let clone = run_capture(
                 &git,
-                &["clone", "--branch", &tag, "--single-branch", &format!("https://github.com/{owner}/{repo}.git"), &destination.to_string_lossy()],
+                &[
+                    "clone",
+                    "--branch",
+                    &tag,
+                    "--single-branch",
+                    &format!("https://github.com/{owner}/{repo}.git"),
+                    &destination.to_string_lossy(),
+                ],
                 None,
             )?;
             if !clone.0 {
@@ -644,7 +718,8 @@ fn install_github_artifact(app: AppHandle, owner: String, repo: String, tag: Str
         return Ok(destination.to_string_lossy().to_string());
     }
 
-    let parsed = Url::parse(&asset_url).map_err(|error| format!("Некорректный URL файла: {error}"))?;
+    let parsed =
+        Url::parse(&asset_url).map_err(|error| format!("Некорректный URL файла: {error}"))?;
     let host = parsed.host_str().unwrap_or_default();
     if host != "github.com" && host != "www.github.com" {
         return Err("Prod-файл разрешено скачивать только с github.com.".to_string());
@@ -657,7 +732,16 @@ fn install_github_artifact(app: AppHandle, owner: String, repo: String, tag: Str
     let curl = PathBuf::from("curl.exe");
     let download = run_capture(
         &curl,
-        &["-fL", "--retry", "3", "--max-time", "600", "-o", &executable.to_string_lossy(), parsed.as_str()],
+        &[
+            "-fL",
+            "--retry",
+            "3",
+            "--max-time",
+            "600",
+            "-o",
+            &executable.to_string_lossy(),
+            parsed.as_str(),
+        ],
         None,
     )?;
     if !download.0 {
@@ -705,10 +789,8 @@ fn is_github_artifact_installed(
 ) -> Result<bool, String> {
     let directory = installation_root(&app, &owner, &repo, &tag, &mode)?;
     if mode == "dev" {
-        return Ok(
-            path_is_directory(&directory.join(".git"))?
-                && path_is_file(&directory.join("package.json"))?,
-        );
+        return Ok(path_is_directory(&directory.join(".git"))?
+            && path_is_file(&directory.join("package.json"))?);
     }
 
     let asset_name = sanitize_path_component(&asset_name)?;
@@ -719,12 +801,23 @@ fn is_github_artifact_installed(
 }
 
 #[tauri::command]
-fn set_manager_state(app: AppHandle, mode: String, source_directory: String, production_executable: String, drive_letter: String, browser_url: String) -> Result<ManagerState, String> {
+fn set_manager_state(
+    app: AppHandle,
+    mode: String,
+    source_directory: String,
+    production_executable: String,
+    drive_letter: String,
+    browser_url: String,
+) -> Result<ManagerState, String> {
     if mode != "dev" && mode != "prod" {
         return Err("Unsupported mode. Use dev or prod.".to_string());
     }
     let mut drive_letter = drive_letter.trim().to_ascii_uppercase();
-    if drive_letter.len() != 1 || !drive_letter.chars().all(|character| character.is_ascii_alphabetic()) {
+    if drive_letter.len() != 1
+        || !drive_letter
+            .chars()
+            .all(|character| character.is_ascii_alphabetic())
+    {
         return Err("Выберите букву диска от A до Z.".to_string());
     }
     drive_letter = drive_letter[..1].to_string();
@@ -744,7 +837,10 @@ fn check_prerequisites(_app: AppHandle) -> Result<Value, String> {
     let root = project_root()?;
     let script = root.join("scripts").join("Test-Prerequisites.ps1");
     if !script.is_file() {
-        return Err(format!("Prerequisite script not found: {}", script.display()));
+        return Err(format!(
+            "Prerequisite script not found: {}",
+            script.display()
+        ));
     }
     let powershell = PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe");
     let powershell = if powershell.is_file() {
@@ -762,7 +858,9 @@ fn check_prerequisites(_app: AppHandle) -> Result<Value, String> {
     ];
     let (success, exit_code, text) = run_capture(&powershell, &args, Some(&root))?;
     if !success {
-        return Err(format!("Prerequisite check failed with code {exit_code}: {text}"));
+        return Err(format!(
+            "Prerequisite check failed with code {exit_code}: {text}"
+        ));
     }
     serde_json::from_str(text.trim())
         .map_err(|error| format!("Could not parse prerequisite report: {error}\n{text}"))
@@ -784,7 +882,16 @@ fn inspect_source(source_directory: String) -> SourceStatus {
     }
 
     let git = PathBuf::from("git");
-    let repo_check = run_capture(&git, &["-C", directory.to_str().unwrap_or_default(), "rev-parse", "--is-inside-work-tree"], None);
+    let repo_check = run_capture(
+        &git,
+        &[
+            "-C",
+            directory.to_str().unwrap_or_default(),
+            "rev-parse",
+            "--is-inside-work-tree",
+        ],
+        None,
+    );
     if !matches!(repo_check, Ok((true, _, ref text)) if text.trim() == "true") {
         return SourceStatus {
             exists: true,
@@ -797,13 +904,60 @@ fn inspect_source(source_directory: String) -> SourceStatus {
         };
     }
 
-    let branch = run_capture(&git, &["-C", directory.to_str().unwrap_or_default(), "branch", "--show-current"], None)
-        .ok().filter(|result| result.0).map(|result| result.2.trim().to_string()).filter(|value| !value.is_empty());
-    let commit = run_capture(&git, &["-C", directory.to_str().unwrap_or_default(), "rev-parse", "HEAD"], None)
-        .ok().filter(|result| result.0).map(|result| result.2.trim().to_string()).filter(|value| !value.is_empty());
-    let tag = run_capture(&git, &["-C", directory.to_str().unwrap_or_default(), "describe", "--tags", "--exact-match"], None)
-        .ok().filter(|result| result.0).map(|result| result.2.trim().to_string()).filter(|value| !value.is_empty());
-    let status_output = run_capture(&git, &["-C", directory.to_str().unwrap_or_default(), "status", "--porcelain", "--untracked-files=no"], None);
+    let branch = run_capture(
+        &git,
+        &[
+            "-C",
+            directory.to_str().unwrap_or_default(),
+            "branch",
+            "--show-current",
+        ],
+        None,
+    )
+    .ok()
+    .filter(|result| result.0)
+    .map(|result| result.2.trim().to_string())
+    .filter(|value| !value.is_empty());
+    let commit = run_capture(
+        &git,
+        &[
+            "-C",
+            directory.to_str().unwrap_or_default(),
+            "rev-parse",
+            "HEAD",
+        ],
+        None,
+    )
+    .ok()
+    .filter(|result| result.0)
+    .map(|result| result.2.trim().to_string())
+    .filter(|value| !value.is_empty());
+    let tag = run_capture(
+        &git,
+        &[
+            "-C",
+            directory.to_str().unwrap_or_default(),
+            "describe",
+            "--tags",
+            "--exact-match",
+        ],
+        None,
+    )
+    .ok()
+    .filter(|result| result.0)
+    .map(|result| result.2.trim().to_string())
+    .filter(|value| !value.is_empty());
+    let status_output = run_capture(
+        &git,
+        &[
+            "-C",
+            directory.to_str().unwrap_or_default(),
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+        ],
+        None,
+    );
     let dirty_tracked = matches!(status_output, Ok((true, _, ref text)) if !text.trim().is_empty());
     let status = if dirty_tracked {
         "Есть изменённые отслеживаемые файлы.".to_string()
@@ -836,28 +990,70 @@ fn prepare_release(app: AppHandle, tag: String) -> Result<SourceStatus, String> 
 
     let git = PathBuf::from("git");
     if directory.join(".git").is_dir() {
-        let status_output = run_capture(&git, &["-C", directory.to_str().unwrap_or_default(), "status", "--porcelain", "--untracked-files=no"], None)?;
+        let status_output = run_capture(
+            &git,
+            &[
+                "-C",
+                directory.to_str().unwrap_or_default(),
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+            ],
+            None,
+        )?;
         if status_output.0 && !status_output.2.trim().is_empty() {
             return Err("Рабочее дерево содержит изменения. Сначала сохраните или перенесите их в отдельный commit или ветку; автоматический reset не выполняется.".to_string());
         }
-        let fetch = run_capture(&git, &["-C", directory.to_str().unwrap_or_default(), "fetch", "--tags", "--prune", "origin"], None)?;
+        let fetch = run_capture(
+            &git,
+            &[
+                "-C",
+                directory.to_str().unwrap_or_default(),
+                "fetch",
+                "--tags",
+                "--prune",
+                "origin",
+            ],
+            None,
+        )?;
         if !fetch.0 {
             return Err(format!("Не удалось обновить tags из origin: {}", fetch.2));
         }
-        let checkout = run_capture(&git, &["-C", directory.to_str().unwrap_or_default(), "checkout", "--detach", tag], None)?;
+        let checkout = run_capture(
+            &git,
+            &[
+                "-C",
+                directory.to_str().unwrap_or_default(),
+                "checkout",
+                "--detach",
+                tag,
+            ],
+            None,
+        )?;
         if !checkout.0 {
-            return Err(format!("Не удалось переключиться на tag {tag}: {}", checkout.2));
+            return Err(format!(
+                "Не удалось переключиться на tag {tag}: {}",
+                checkout.2
+            ));
         }
     } else {
         if directory.exists() {
             return Err("Каталог существует, но не является Git-репозиторием. Выберите пустую папку или безопасный checkout.".to_string());
         }
         if let Some(parent) = directory.parent() {
-            fs::create_dir_all(parent).map_err(|error| format!("Could not create source parent directory: {error}"))?;
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("Could not create source parent directory: {error}"))?;
         }
         let clone = run_capture(
             &git,
-            &["clone", "--branch", tag, "--single-branch", "https://github.com/EssenceOfDream/The_Omniscience.git", directory.to_str().unwrap_or_default()],
+            &[
+                "clone",
+                "--branch",
+                tag,
+                "--single-branch",
+                "https://github.com/EssenceOfDream/The_Omniscience.git",
+                directory.to_str().unwrap_or_default(),
+            ],
             None,
         )?;
         if !clone.0 {
@@ -886,7 +1082,10 @@ fn check_latest_release() -> ReleaseStatus {
             Ok(value) => ReleaseStatus {
                 available: true,
                 tag: value["tag_name"].as_str().map(str::to_string),
-                name: value["name"].as_str().map(str::to_string).or_else(|| value["tag_name"].as_str().map(str::to_string)),
+                name: value["name"]
+                    .as_str()
+                    .map(str::to_string)
+                    .or_else(|| value["tag_name"].as_str().map(str::to_string)),
                 published_at: value["published_at"].as_str().map(str::to_string),
                 url: value["html_url"].as_str().map(str::to_string),
                 error: None,
@@ -910,7 +1109,7 @@ fn check_latest_release() -> ReleaseStatus {
                 url: None,
                 error: Some(format!("GitHub не ответил (код {exit_code}): {detail}")),
             }
-        },
+        }
         Err(error) => ReleaseStatus {
             available: false,
             tag: None,
@@ -933,7 +1132,9 @@ fn find_executable_on_path(name: &str) -> Option<PathBuf> {
 
 fn node_is_compatible(version: &str) -> bool {
     let version = version.trim().trim_start_matches('v');
-    let mut parts = version.split('.').filter_map(|part| part.parse::<u64>().ok());
+    let mut parts = version
+        .split('.')
+        .filter_map(|part| part.parse::<u64>().ok());
     let (Some(major), Some(minor)) = (parts.next(), parts.next()) else {
         return false;
     };
@@ -986,7 +1187,10 @@ fn node_installation_is_compatible(installation: Option<&(PathBuf, PathBuf)>) ->
         .unwrap_or(false)
 }
 
-fn prepend_to_path(path: &Path, current: Option<&std::ffi::OsStr>) -> Result<std::ffi::OsString, String> {
+fn prepend_to_path(
+    path: &Path,
+    current: Option<&std::ffi::OsStr>,
+) -> Result<std::ffi::OsString, String> {
     let mut paths = vec![path.to_path_buf()];
     if let Some(current) = current {
         paths.extend(env::split_paths(current));
@@ -996,7 +1200,10 @@ fn prepend_to_path(path: &Path, current: Option<&std::ffi::OsStr>) -> Result<std
     env::join_paths(paths).map_err(|error| format!("Не удалось обновить PATH процесса: {error}"))
 }
 
-fn stream_child_output<R: Read + Send + 'static>(app: AppHandle, reader: R) -> thread::JoinHandle<()> {
+fn stream_child_output<R: Read + Send + 'static>(
+    app: AppHandle,
+    reader: R,
+) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let (sender, receiver) = mpsc::sync_channel(256);
         thread::spawn(move || {
@@ -1096,19 +1303,29 @@ fn run_logged_process(
         let _ = reader.join();
     }
     if !status.success() {
-        return Err(format!("{description} завершился с кодом {}.", status.code().unwrap_or(1)));
+        return Err(format!(
+            "{description} завершился с кодом {}.",
+            status.code().unwrap_or(1)
+        ));
     }
     Ok(())
 }
 
 fn winget_executable() -> Option<PathBuf> {
-    find_executable_on_path(if cfg!(windows) { "winget.exe" } else { "winget" }).or_else(|| {
-        env::var_os("LOCALAPPDATA").map(|local_app_data| {
-            PathBuf::from(local_app_data)
-                .join("Microsoft")
-                .join("WindowsApps")
-                .join("winget.exe")
-        }).filter(|path| path.is_file())
+    find_executable_on_path(if cfg!(windows) {
+        "winget.exe"
+    } else {
+        "winget"
+    })
+    .or_else(|| {
+        env::var_os("LOCALAPPDATA")
+            .map(|local_app_data| {
+                PathBuf::from(local_app_data)
+                    .join("Microsoft")
+                    .join("WindowsApps")
+                    .join("winget.exe")
+            })
+            .filter(|path| path.is_file())
     })
 }
 
@@ -1158,8 +1375,7 @@ fn ensure_node(app: &AppHandle) -> Result<(PathBuf, PathBuf, std::ffi::OsString)
 
     if !node_installation_is_compatible(installation.as_ref()) {
         return Err(
-            "Не удалось установить совместимый Node.js LTS (нужен 20.19+ или 22.12+)."
-                .to_string(),
+            "Не удалось установить совместимый Node.js LTS (нужен 20.19+ или 22.12+).".to_string(),
         );
     }
 
@@ -1189,7 +1405,10 @@ fn visual_cpp_tools_installed() -> bool {
     let program_files_x86 = env::var_os("ProgramFiles(x86)")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"C:\Program Files (x86)"));
-    let vswhere = program_files_x86.join("Microsoft Visual Studio").join("Installer").join("vswhere.exe");
+    let vswhere = program_files_x86
+        .join("Microsoft Visual Studio")
+        .join("Installer")
+        .join("vswhere.exe");
     if !vswhere.is_file() {
         return false;
     }
@@ -1217,11 +1436,19 @@ fn ensure_dev_toolchain(
         .unwrap_or_default()
         .join(".cargo")
         .join("bin");
-    let rustup = find_executable_on_path(if cfg!(windows) { "rustup.exe" } else { "rustup" })
-        .or_else(|| {
-            let candidate = cargo_bin.join(if cfg!(windows) { "rustup.exe" } else { "rustup" });
-            candidate.is_file().then_some(candidate)
+    let rustup = find_executable_on_path(if cfg!(windows) {
+        "rustup.exe"
+    } else {
+        "rustup"
+    })
+    .or_else(|| {
+        let candidate = cargo_bin.join(if cfg!(windows) {
+            "rustup.exe"
+        } else {
+            "rustup"
         });
+        candidate.is_file().then_some(candidate)
+    });
 
     let rustup = if let Some(rustup) = rustup {
         rustup
@@ -1244,7 +1471,11 @@ fn ensure_dev_toolchain(
             Some(path),
             "Установка rustup через winget",
         )?;
-        let candidate = cargo_bin.join(if cfg!(windows) { "rustup.exe" } else { "rustup" });
+        let candidate = cargo_bin.join(if cfg!(windows) {
+            "rustup.exe"
+        } else {
+            "rustup"
+        });
         if !candidate.is_file() {
             return Err("Rustup установлен, но rustup.exe не найден.".to_string());
         }
@@ -1322,9 +1553,7 @@ fn launch_dev(app: &AppHandle, directory: &Path) -> Result<(), String> {
 
     emit_output(
         app,
-        format!(
-            "\nЗапуск Omniscience Dev на порту {port} (updater использует 22869)…\n"
-        ),
+        format!("\nЗапуск Omniscience Dev на порту {port} (updater использует 22869)…\n"),
     );
     let mut child = Command::new(&node)
         .arg(&npm_cli)
@@ -1394,12 +1623,18 @@ fn append_executables_from_directory(
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => {
-            return Err(format!("Не удалось прочитать {}: {error}", directory.display()));
+            return Err(format!(
+                "Не удалось прочитать {}: {error}",
+                directory.display()
+            ));
         }
     };
     for entry in entries {
         let entry = entry.map_err(|error| {
-            format!("Не удалось прочитать каталог {}: {error}", directory.display())
+            format!(
+                "Не удалось прочитать каталог {}: {error}",
+                directory.display()
+            )
         })?;
         if entry
             .file_type()
@@ -1551,14 +1786,25 @@ Write-Output $processIds.Count
             .join("v1.0")
             .join("powershell.exe");
         let output = Command::new(powershell)
-            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                script,
+            ])
             .env("OMNISCIENCE_EXECUTABLE_PATHS", target_paths)
             .output()
-            .map_err(|error| format!("Не удалось запустить PowerShell для завершения Omniscience: {error}"))?;
+            .map_err(|error| {
+                format!("Не удалось запустить PowerShell для завершения Omniscience: {error}")
+            })?;
         if !output.status.success() {
             let details = String::from_utf8_lossy(&output.stderr).trim().to_string();
             return Err(if details.is_empty() {
-                format!("PowerShell завершился с кодом {}.", output.status.code().unwrap_or(1))
+                format!(
+                    "PowerShell завершился с кодом {}.",
+                    output.status.code().unwrap_or(1)
+                )
             } else {
                 format!("Не удалось завершить процессы Omniscience: {details}")
             });
@@ -1566,7 +1812,9 @@ Write-Output $processIds.Count
         String::from_utf8_lossy(&output.stdout)
             .trim()
             .parse::<usize>()
-            .map_err(|error| format!("Не удалось прочитать результат завершения Omniscience: {error}"))
+            .map_err(|error| {
+                format!("Не удалось прочитать результат завершения Omniscience: {error}")
+            })
     }
 }
 
@@ -1658,6 +1906,205 @@ fn stop_all_omniscience(state: State<'_, InstallerState>, app: AppHandle) -> Res
     result
 }
 
+fn powershell_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn shortcut_compatible_path(path: &Path) -> PathBuf {
+    let path = path.to_string_lossy();
+    if let Some(unc_path) = path.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{unc_path}"))
+    } else if let Some(dos_path) = path.strip_prefix(r"\\?\") {
+        PathBuf::from(dos_path)
+    } else {
+        PathBuf::from(path.as_ref())
+    }
+}
+
+fn dev_startup_script(project_directory: &Path) -> String {
+    format!(
+        r#"$ErrorActionPreference = 'Stop'
+$logDirectory = Join-Path $env:LOCALAPPDATA 'Omniscience Updater'
+$logPath = Join-Path $logDirectory 'dev-startup.log'
+New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+Start-Transcript -Path $logPath -Append | Out-Null
+try {{
+    $projectDirectory = {}
+    $nodeCandidates = @()
+    if ($env:ProgramFiles) {{
+        $nodeCandidates += Join-Path $env:ProgramFiles 'nodejs\node.exe'
+    }}
+    if ($env:LOCALAPPDATA) {{
+        $nodeCandidates += Join-Path $env:LOCALAPPDATA 'Programs\nodejs\node.exe'
+    }}
+    $pathNode = Get-Command 'node.exe' -ErrorAction SilentlyContinue
+    if ($pathNode) {{
+        $nodeCandidates += $pathNode.Source
+    }}
+    $node = $nodeCandidates |
+        Where-Object {{ $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) }} |
+        Select-Object -First 1
+    if (-not $node) {{
+        throw 'Node.js was not found. Open the updater and prepare Dev mode first.'
+    }}
+    $nodeDirectory = Split-Path -Parent $node
+    $npmCli = Join-Path $nodeDirectory 'node_modules\npm\bin\npm-cli.js'
+    if (-not (Test-Path -LiteralPath $npmCli -PathType Leaf)) {{
+        throw "npm-cli.js was not found at $npmCli"
+    }}
+    $cargoDirectory = Join-Path $env:USERPROFILE '.cargo\bin'
+    $env:PATH = "$nodeDirectory;$cargoDirectory;$env:PATH"
+    Set-Location -LiteralPath $projectDirectory
+
+    & $node $npmCli install --no-audit --no-fund
+    if ($LASTEXITCODE -ne 0) {{
+        throw "npm install failed with exit code $LASTEXITCODE"
+    }}
+    & $node $npmCli run tauri -- dev
+    if ($LASTEXITCODE -ne 0) {{
+        throw "Tauri Dev exited with code $LASTEXITCODE"
+    }}
+}} catch {{
+    Write-Error $_
+    exit 1
+}} finally {{
+    Stop-Transcript | Out-Null
+}}
+"#,
+        powershell_literal(&project_directory.to_string_lossy())
+    )
+}
+
+#[tauri::command]
+fn add_omniscience_to_startup(app: AppHandle) -> Result<String, String> {
+    let state = load_state(&app);
+    let (target, arguments, working_directory, startup_script) = match state.mode.as_str() {
+        "dev" => {
+            let project_directory = PathBuf::from(state.source_directory.trim());
+            if !project_directory.join("package.json").is_file() {
+                return Err(
+                    "Для автозагрузки Dev укажите существующий каталог исходников.".to_string(),
+                );
+            }
+            let script_path = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| {
+                    format!("Не удалось определить каталог данных приложения: {error}")
+                })?
+                .join("omniscience-startup.ps1");
+            let script = dev_startup_script(&project_directory);
+            fs::write(&script_path, script).map_err(|error| {
+                format!("Не удалось сохранить Dev-скрипт автозагрузки: {error}")
+            })?;
+
+            let powershell = env::var_os("SystemRoot")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
+                .join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe");
+            let arguments = format!(
+                "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{}\"",
+                script_path.display()
+            );
+            (powershell, arguments, project_directory, Some(script_path))
+        }
+        "prod" => {
+            let executable = PathBuf::from(state.production_executable.trim());
+            if !executable.is_file() {
+                return Err("Production EXE не настроен или файл отсутствует.".to_string());
+            }
+            let executable = executable
+                .canonicalize()
+                .map_err(|error| format!("Не удалось определить путь к Production EXE: {error}"))?;
+            let working_directory = executable
+                .parent()
+                .ok_or_else(|| "Не удалось определить каталог Production EXE.".to_string())?
+                .to_path_buf();
+            (executable, String::new(), working_directory, None)
+        }
+        _ => return Err("Выберите режим Dev или Prod перед настройкой автозагрузки.".to_string()),
+    };
+
+    #[cfg(not(windows))]
+    {
+        let _ = (target, arguments, working_directory, startup_script);
+        return Err("Настройка автозагрузки поддерживается только в Windows.".to_string());
+    }
+
+    #[cfg(windows)]
+    {
+        let target = shortcut_compatible_path(&target);
+        let working_directory = shortcut_compatible_path(&working_directory);
+        let script = r#"
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
+$ErrorActionPreference = 'Stop'
+$startupDirectory = [Environment]::GetFolderPath('Startup')
+if (-not $startupDirectory) { throw 'Could not resolve the current user Startup folder.' }
+$shortcutPath = Join-Path $startupDirectory 'The_Omniscience.lnk'
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut($shortcutPath)
+$shortcut.TargetPath = $env:OMNISCIENCE_STARTUP_TARGET
+$shortcut.Arguments = $env:OMNISCIENCE_STARTUP_ARGUMENTS
+$shortcut.WorkingDirectory = $env:OMNISCIENCE_STARTUP_WORKING_DIRECTORY
+$shortcut.Description = 'Start the selected Omniscience version when you sign in.'
+$shortcut.WindowStyle = 7
+$shortcut.Save()
+Write-Output $shortcutPath
+"#;
+        let system_root = env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+        let powershell = system_root
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        let output = Command::new(powershell)
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                script,
+            ])
+            .env("OMNISCIENCE_STARTUP_TARGET", &target)
+            .env("OMNISCIENCE_STARTUP_ARGUMENTS", &arguments)
+            .env("OMNISCIENCE_STARTUP_WORKING_DIRECTORY", &working_directory)
+            .output()
+            .map_err(|error| format!("Не удалось создать ярлык автозагрузки: {error}"))?;
+        if !output.status.success() {
+            let details = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if details.is_empty() {
+                format!(
+                    "PowerShell завершился с кодом {} при создании ярлыка автозагрузки.",
+                    output.status.code().unwrap_or(1)
+                )
+            } else {
+                format!("Не удалось создать ярлык автозагрузки: {details}")
+            });
+        }
+
+        if let Some(script_path) = startup_script {
+            emit_output(
+                &app,
+                format!(
+                    "Dev-автозагрузка настроена; журнал запуска будет записываться в {}.\n",
+                    script_path
+                        .parent()
+                        .unwrap_or_else(|| Path::new("."))
+                        .join("dev-startup.log")
+                        .display()
+                ),
+            );
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+}
+
 #[tauri::command]
 fn start_install(
     app: AppHandle,
@@ -1693,14 +2140,23 @@ fn start_install(
     };
 
     if !host_script.is_file() {
-        return Err(format!("PTY host script not found: {}", host_script.display()));
+        return Err(format!(
+            "PTY host script not found: {}",
+            host_script.display()
+        ));
     }
     let installer_script = base_directory.join("scripts").join(script_name);
     if !installer_script.is_file() {
-        return Err(format!("Installer script not found: {}", installer_script.display()));
+        return Err(format!(
+            "Installer script not found: {}",
+            installer_script.display()
+        ));
     }
     if !cfg!(debug_assertions) && !node_executable.is_file() {
-        return Err(format!("Bundled Node runtime not found: {}", node_executable.display()));
+        return Err(format!(
+            "Bundled Node runtime not found: {}",
+            node_executable.display()
+        ));
     }
 
     if state
@@ -1723,7 +2179,9 @@ fn start_install(
         Ok(child) => child,
         Err(error) => {
             state.running.store(false, Ordering::Release);
-            return Err(format!("Could not start the bundled installer host: {error}"));
+            return Err(format!(
+                "Could not start the bundled installer host: {error}"
+            ));
         }
     };
 
@@ -1796,6 +2254,7 @@ pub fn run() {
             check_latest_release,
             launch_omniscience,
             stop_all_omniscience,
+            add_omniscience_to_startup,
             open_github_browser,
             navigate_github_browser,
             open_github_devtools,
@@ -1809,12 +2268,12 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ManagerState, node_is_compatible, omniscience_executable_paths_in_root,
-        scan_installed_versions, tauri_dev_config,
+        ManagerState, dev_startup_script, node_is_compatible, omniscience_executable_paths_in_root,
+        scan_installed_versions, shortcut_compatible_path, tauri_dev_config,
     };
     use std::{
         fs,
-        path::PathBuf,
+        path::{Path, PathBuf},
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -1905,6 +2364,26 @@ mod tests {
         let executables = omniscience_executable_paths_in_root(&state, &installation_root).unwrap();
         assert!(executables.contains(&prod));
         assert!(executables.contains(&dev_executable));
+    }
+
+    #[test]
+    fn dev_startup_script_uses_tauri_wrapper_and_escapes_paths() {
+        let script = dev_startup_script(Path::new(r"C:\Users\O'Brien\Omniscience"));
+        assert!(script.contains("'C:\\Users\\O''Brien\\Omniscience'"));
+        assert!(script.contains("& $node $npmCli run tauri -- dev"));
+        assert!(script.contains("dev-startup.log"));
+    }
+
+    #[test]
+    fn startup_shortcut_paths_do_not_use_extended_windows_prefixes() {
+        assert_eq!(
+            shortcut_compatible_path(Path::new(r"\\?\C:\Omniscience\app.exe")),
+            PathBuf::from(r"C:\Omniscience\app.exe")
+        );
+        assert_eq!(
+            shortcut_compatible_path(Path::new(r"\\?\UNC\server\share\app.exe")),
+            PathBuf::from(r"\\server\share\app.exe")
+        );
     }
 
     #[test]

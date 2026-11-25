@@ -1,6 +1,6 @@
 fn main() {
-    let attributes = tauri_build::Attributes::new()
-        .app_manifest(tauri_build::AppManifest::new().commands(&[
+    let attributes =
+        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
             "start_install",
             "get_manager_state",
             "get_output_log_path",
@@ -12,6 +12,7 @@ fn main() {
             "check_latest_release",
             "launch_omniscience",
             "stop_all_omniscience",
+            "add_omniscience_to_startup",
             "open_github_browser",
             "navigate_github_browser",
             "open_github_devtools",
