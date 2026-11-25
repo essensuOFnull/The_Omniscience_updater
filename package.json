@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 22869 --strictPort",
     "build": "vite build",
+    "test": "node --test scripts/*.test.cjs",
     "stage:resources": "node scripts/stage-tauri-resources.mjs",
     "check:resources": "node scripts/stage-tauri-resources.mjs --check",
     "tauri": "tauri",
