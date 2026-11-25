@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-install-github-artifact"
+description = "Enables the install_github_artifact command without any pre-configured scope."
+commands.allow = ["install_github_artifact"]
+
+[[permission]]
+identifier = "deny-install-github-artifact"
+description = "Denies the install_github_artifact command without any pre-configured scope."
+commands.deny = ["install_github_artifact"]

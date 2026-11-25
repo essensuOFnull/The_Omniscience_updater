@@ -128,6 +128,11 @@ function ownerAndRepoPlaceholder() {
 
 await listen('installer-output', (event) => appendOutput(event.payload.text));
 
+await listen('github-browser-load', (event) => {
+  const { event: loadEvent, url } = event.payload;
+  appendOutput(`\nGitHub WebView ${loadEvent}: ${url}\n`);
+});
+
 await listen('installer-finished', (event) => {
   const { success, exitCode } = event.payload;
   setBusy(false, success ? 'Установка завершена' : `Ошибка (код ${exitCode})`);

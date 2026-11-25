@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "github-browser",
+  "description": "Allow GitHub pages to use the updater bridge in the dedicated browser window",
+  "windows": ["github-browser"],
+  "remote": {
+    "urls": [
+      "https://github.com/**",
+      "https://www.github.com/**"
+    ]
+  },
+  "permissions": ["allow-install-github-artifact"]
+}

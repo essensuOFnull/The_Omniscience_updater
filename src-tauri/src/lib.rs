@@ -9,8 +9,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager, State};
-use tauri::{Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, Url, WebviewBuilder,
+    WebviewUrl, WindowBuilder,
+};
 
 #[derive(Default)]
 struct InstallerState {
@@ -262,7 +264,7 @@ fn github_injection_script() -> String {
 }
 
 #[tauri::command]
-fn open_github_browser(app: AppHandle, url: String) -> Result<String, String> {
+async fn open_github_browser(app: AppHandle, url: String) -> Result<String, String> {
     let mut url = url.trim().to_string();
     if url.is_empty() {
         url = "https://github.com/EssenceOfDream/The_Omniscience/releases".to_string();
@@ -282,43 +284,86 @@ fn open_github_browser(app: AppHandle, url: String) -> Result<String, String> {
     state.browser_url = parsed.to_string();
     save_state(&app, &state)?;
 
-    if let Some(window) = app.get_webview_window("github-browser") {
-        window.navigate(parsed).map_err(|error| format!("Не удалось перейти по адресу: {error}"))?;
-        window.set_focus().map_err(|error| format!("Не удалось открыть окно: {error}"))?;
-        let script = github_injection_script();
-        let _ = window.eval(script);
-    } else {
-        WebviewWindowBuilder::new(
-            &app,
-            "github-browser",
-            WebviewUrl::External(parsed),
-        )
-        .title("Omniscience — GitHub")
-        .inner_size(1180.0, 820.0)
-        .resizable(true)
-        .visible(true)
-        .devtools(true)
-        .on_page_load(|window, payload| {
-            if payload.event() == tauri::webview::PageLoadEvent::Finished {
-                let script = github_injection_script();
-                let _ = window.eval(script);
-            }
-        })
-        .build()
-        .map_err(|error| format!("Не удалось открыть встроенный браузер: {error}"))?;
-    }
+    let window = match (app.get_window("github-browser"), app.get_webview("github-browser")) {
+        (Some(window), Some(webview)) => {
+            webview
+                .navigate(parsed.clone())
+                .map_err(|error| format!("Не удалось перейти по адресу: {error}"))?;
+            window
+        }
+        (None, None) => {
+            let window = WindowBuilder::new(&app, "github-browser")
+                .title("Omniscience — загрузка GitHub")
+                .inner_size(1180.0, 820.0)
+                .resizable(true)
+                .visible(false)
+                .build()
+                .map_err(|error| format!("Не удалось создать окно GitHub: {error}"))?;
+            attach_github_webview(&app, &window, parsed)?;
+            window
+        }
+        _ => {
+            return Err(
+                "Не удалось восстановить окно GitHub: состояние окна неполное.".to_string(),
+            );
+        }
+    };
+    window
+        .show()
+        .map_err(|error| format!("Не удалось показать окно GitHub: {error}"))?;
+    window
+        .set_focus()
+        .map_err(|error| format!("Не удалось сфокусировать окно GitHub: {error}"))?;
     Ok(state.browser_url)
 }
 
+fn attach_github_webview(app: &AppHandle, window: &tauri::Window, url: Url) -> Result<(), String> {
+    let app_handle = app.clone();
+    let webview = WebviewBuilder::new("github-browser", WebviewUrl::External(url))
+        .devtools(true)
+        .on_page_load(move |webview, payload| {
+            let (event, title) = match payload.event() {
+                tauri::webview::PageLoadEvent::Started => {
+                    ("started", "Omniscience — загрузка GitHub")
+                }
+                tauri::webview::PageLoadEvent::Finished => {
+                    ("finished", "Omniscience — GitHub (загружено)")
+                }
+            };
+            if let Some(window) = app_handle.get_window("github-browser") {
+                let _ = window.set_title(title);
+            }
+            let _ = app_handle.emit(
+                "github-browser-load",
+                serde_json::json!({
+                    "event": event,
+                    "url": payload.url().as_str(),
+                }),
+            );
+            if event == "finished" {
+                let _ = webview.eval(github_injection_script());
+            }
+        });
+
+    window
+        .add_child(
+            webview,
+            LogicalPosition::new(0.0, 0.0),
+            LogicalSize::new(1180.0, 820.0),
+        )
+        .map_err(|error| format!("Не удалось добавить GitHub WebView: {error}"))?;
+    Ok(())
+}
+
 #[tauri::command]
-fn navigate_github_browser(app: AppHandle, url: String) -> Result<String, String> {
-    open_github_browser(app, url)
+async fn navigate_github_browser(app: AppHandle, url: String) -> Result<String, String> {
+    open_github_browser(app, url).await
 }
 
 #[tauri::command]
 fn open_github_devtools(app: AppHandle) -> Result<(), String> {
     let window = app
-        .get_webview_window("github-browser")
+        .get_webview("github-browser")
         .ok_or_else(|| "Окно GitHub ещё не открыто.".to_string())?;
     window.open_devtools();
     Ok(())
@@ -788,39 +833,6 @@ pub fn run() {
             open_github_devtools,
             install_github_artifact
         ])
-        .setup(|app| {
-            let state = load_state(app.handle());
-            let url = if state.browser_url.trim().is_empty() {
-                "https://github.com/EssenceOfDream/The_Omniscience/releases".to_string()
-            } else {
-                state.browser_url
-            };
-
-            if let Ok(parsed) = Url::parse(&url) {
-                if parsed.scheme() == "https"
-                    && matches!(parsed.host_str(), Some("github.com") | Some("www.github.com"))
-                {
-                    let _window = WebviewWindowBuilder::new(
-                        app.handle(),
-                        "github-browser",
-                        WebviewUrl::External(parsed),
-                    )
-                    .title("Omniscience — GitHub")
-                    .inner_size(1180.0, 820.0)
-                    .resizable(true)
-                    .visible(true)
-                    .devtools(true)
-                    .on_page_load(|window, payload| {
-                        if payload.event() == tauri::webview::PageLoadEvent::Finished {
-                            let script = github_injection_script();
-                            let _ = window.eval(script);
-                        }
-                    })
-                    .build();
-                }
-            }
-            Ok(())
-        })
         .run(tauri::generate_context!())
         .expect("error while running Omniscience Updater");
 }

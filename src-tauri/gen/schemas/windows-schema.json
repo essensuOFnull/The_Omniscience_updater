@@ -177,6 +177,150 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the check_latest_release command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-check-latest-release",
+          "markdownDescription": "Enables the check_latest_release command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the check_prerequisites command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-check-prerequisites",
+          "markdownDescription": "Enables the check_prerequisites command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_manager_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-manager-state",
+          "markdownDescription": "Enables the get_manager_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the inspect_source command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-inspect-source",
+          "markdownDescription": "Enables the inspect_source command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the install_github_artifact command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-install-github-artifact",
+          "markdownDescription": "Enables the install_github_artifact command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the launch_omniscience command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-launch-omniscience",
+          "markdownDescription": "Enables the launch_omniscience command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the navigate_github_browser command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-navigate-github-browser",
+          "markdownDescription": "Enables the navigate_github_browser command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_github_browser command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-github-browser",
+          "markdownDescription": "Enables the open_github_browser command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_github_devtools command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-github-devtools",
+          "markdownDescription": "Enables the open_github_devtools command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the prepare_release command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-prepare-release",
+          "markdownDescription": "Enables the prepare_release command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_manager_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-manager-state",
+          "markdownDescription": "Enables the set_manager_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-install",
+          "markdownDescription": "Enables the start_install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_latest_release command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-check-latest-release",
+          "markdownDescription": "Denies the check_latest_release command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_prerequisites command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-check-prerequisites",
+          "markdownDescription": "Denies the check_prerequisites command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_manager_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-manager-state",
+          "markdownDescription": "Denies the get_manager_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the inspect_source command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-inspect-source",
+          "markdownDescription": "Denies the inspect_source command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the install_github_artifact command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-install-github-artifact",
+          "markdownDescription": "Denies the install_github_artifact command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the launch_omniscience command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-launch-omniscience",
+          "markdownDescription": "Denies the launch_omniscience command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the navigate_github_browser command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-navigate-github-browser",
+          "markdownDescription": "Denies the navigate_github_browser command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_github_browser command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-github-browser",
+          "markdownDescription": "Denies the open_github_browser command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_github_devtools command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-github-devtools",
+          "markdownDescription": "Denies the open_github_devtools command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the prepare_release command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-prepare-release",
+          "markdownDescription": "Denies the prepare_release command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_manager_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-manager-state",
+          "markdownDescription": "Denies the set_manager_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-install",
+          "markdownDescription": "Denies the start_install command without any pre-configured scope."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",
