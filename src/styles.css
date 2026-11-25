@@ -218,8 +218,7 @@ h2 {
   font: inherit;
 }
 
-.inline-status,
-.release-status {
+.inline-status {
   margin: 12px 0 0;
   color: #aeb7c6;
   font-size: 12px;
@@ -227,14 +226,6 @@ h2 {
 }
 
 .inline-status[data-state="error"] {
-  color: #ff9aa7;
-}
-
-.release-status[data-state="ready"] {
-  color: #83d8a3;
-}
-
-.release-status[data-state="error"] {
   color: #ff9aa7;
 }
 

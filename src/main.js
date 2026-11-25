@@ -362,25 +362,6 @@ async function checkPrerequisites() {
   }
 }
 
-async function checkLatestRelease() {
-  const target = document.querySelector('#release-status');
-  target.textContent = 'Запрос GitHub Releases…';
-  try {
-    const release = await invoke('check_latest_release');
-    if (!release.available) {
-      target.textContent = release.error || 'Релиз недоступен.';
-      target.dataset.state = 'error';
-      return;
-    }
-    target.dataset.state = 'ready';
-    target.textContent = `${release.name || release.tag || 'Новый релиз'}${release.publishedAt ? ` · ${release.publishedAt}` : ''}`;
-    if (release.tag) document.querySelector('#release-tag').value = release.tag;
-  } catch (error) {
-    target.textContent = `Ошибка проверки: ${String(error)}`;
-    target.dataset.state = 'error';
-  }
-}
-
 function updateInstallPathPreview() {
   const drive = document.querySelector('#drive-letter').value;
   const preview = document.querySelector('#install-path-preview');
@@ -458,7 +439,6 @@ for (const button of installerButtons) {
 }
 
 document.querySelector('#check-prerequisites').addEventListener('click', checkPrerequisites);
-document.querySelector('#check-release').addEventListener('click', checkLatestRelease);
 for (const radio of document.querySelectorAll('input[name="mode"]')) {
   radio.addEventListener('change', async () => {
     try {
@@ -497,21 +477,6 @@ document.querySelector('#open-github-devtools').addEventListener('click', async 
   }
 });
 
-document.querySelector('#prepare-release').addEventListener('click', async () => {
-  const tag = document.querySelector('#release-tag').value.trim();
-  appendOutput(`\nПодготовка release ${tag || '(tag не указан)'}…\n`);
-  setBusy(true, 'Подготовка release');
-  try {
-    await saveState();
-    const result = await invoke('prepare_release', { tag });
-    appendOutput(`Release подготовлен.\ncommit ${result.commit || 'не определён'}\n`);
-    setBusy(false, 'Release готов');
-  } catch (error) {
-    appendOutput(`\nОшибка подготовки: ${String(error)}\n`);
-    setBusy(false, 'Ошибка release');
-  }
-});
-
 document.querySelector('#launch').addEventListener('click', async () => {
   const isDev = selectedMode() === 'dev';
   if (isDev) setBusy(true, 'Подготовка Dev');
@@ -546,4 +511,3 @@ updateInstallPathPreview();
 
 await loadInstalledVersions();
 await checkPrerequisites();
-await checkLatestRelease();

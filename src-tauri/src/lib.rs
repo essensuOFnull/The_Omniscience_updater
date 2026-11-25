@@ -1331,6 +1331,7 @@ fn launch_dev(app: &AppHandle, directory: &Path) -> Result<(), String> {
         .current_dir(directory)
         .env("PATH", &path)
         .env("TAURI_CONFIG", tauri_config)
+        .env("OMNISCIENCE_DEV_PORT", port.to_string())
         .env("CARGO_BUILD_JOBS", "1")
         .env("CARGO_INCREMENTAL", "0")
         .env("CARGO_TERM_COLOR", "always")
