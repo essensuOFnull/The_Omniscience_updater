@@ -1562,8 +1562,6 @@ fn launch_dev(app: &AppHandle, directory: &Path) -> Result<(), String> {
         .env("PATH", &path)
         .env("TAURI_CONFIG", tauri_config)
         .env("OMNISCIENCE_DEV_PORT", port.to_string())
-        .env("CARGO_BUILD_JOBS", "1")
-        .env("CARGO_INCREMENTAL", "0")
         .env("CARGO_TERM_COLOR", "always")
         .env("CARGO_TERM_PROGRESS_WHEN", "never")
         .env("FORCE_COLOR", "1")
@@ -1957,8 +1955,6 @@ try {{
     }}
     $cargoDirectory = Join-Path $env:USERPROFILE '.cargo\bin'
     $env:PATH = "$nodeDirectory;$cargoDirectory;$env:PATH"
-    $env:CARGO_BUILD_JOBS = '1'
-    $env:CARGO_INCREMENTAL = '0'
     $env:CARGO_TERM_COLOR = 'never'
     $env:CARGO_TERM_PROGRESS_WHEN = 'never'
     Set-Location -LiteralPath $projectDirectory
@@ -2416,8 +2412,8 @@ mod tests {
         assert!(script.contains("Tauri CLI launched as PID"));
         assert!(script.contains("System.Net.Sockets.TcpListener"));
         assert!(script.contains("npm run preview -- --host 127.0.0.1 --port $port --strictPort"));
-        assert!(script.contains("$env:CARGO_BUILD_JOBS = '1'"));
-        assert!(script.contains("$env:CARGO_INCREMENTAL = '0'"));
+        assert!(!script.contains("CARGO_BUILD_JOBS"));
+        assert!(!script.contains("CARGO_INCREMENTAL"));
         assert!(script.contains("[System.IO.File]::WriteAllText("));
         assert!(script.contains("[System.Text.UTF8Encoding]::new($false)"));
         assert!(script.contains("[startup] Starting Omniscience Dev on port $port"));
