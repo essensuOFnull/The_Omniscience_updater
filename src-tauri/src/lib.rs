@@ -15,6 +15,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(any(feature = "portable", test))]
+use std::path::Component;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{
@@ -2140,6 +2143,238 @@ Write-Output $shortcutPath
     }
 }
 
+#[cfg(any(feature = "portable", test))]
+const PORTABLE_RESOURCE_ARCHIVE_MAGIC: &[u8; 8] = b"OMNIPK01";
+
+#[cfg(any(feature = "portable", test))]
+const PORTABLE_RESOURCE_TRAILER_MAGIC: &[u8; 8] = b"OMNIPRT1";
+
+#[cfg(any(feature = "portable", test))]
+fn locate_portable_resource_archive<R: Read + std::io::Seek>(
+    mut executable: R,
+) -> Result<(u64, u64, [u8; 32]), String> {
+    use std::io::SeekFrom;
+
+    const TRAILER_LENGTH: u64 = 48;
+    let executable_length = executable
+        .seek(SeekFrom::End(0))
+        .map_err(|error| format!("Could not inspect portable executable: {error}"))?;
+    if executable_length < TRAILER_LENGTH {
+        return Err("Portable executable has no embedded resource archive.".to_string());
+    }
+
+    executable
+        .seek(SeekFrom::End(-(TRAILER_LENGTH as i64)))
+        .map_err(|error| format!("Could not locate portable resource marker: {error}"))?;
+    let mut trailer = [0; TRAILER_LENGTH as usize];
+    executable
+        .read_exact(&mut trailer)
+        .map_err(|error| format!("Could not read portable resource marker: {error}"))?;
+    if &trailer[..8] != PORTABLE_RESOURCE_TRAILER_MAGIC {
+        return Err("Portable executable has an invalid resource marker.".to_string());
+    }
+    let archive_length = u64::from_le_bytes(trailer[8..16].try_into().unwrap());
+    if archive_length == 0 || archive_length > executable_length - TRAILER_LENGTH {
+        return Err("Portable executable has an invalid resource archive length.".to_string());
+    }
+    let archive_start = executable_length - TRAILER_LENGTH - archive_length;
+    let fingerprint = trailer[16..]
+        .try_into()
+        .expect("portable archive fingerprint must be 32 bytes");
+    Ok((archive_start, archive_length, fingerprint))
+}
+
+#[cfg(any(feature = "portable", test))]
+fn unpack_portable_resource_archive<R: Read>(
+    mut archive: R,
+    destination: &Path,
+) -> Result<(), String> {
+    let mut magic = [0; 8];
+    archive
+        .read_exact(&mut magic)
+        .map_err(|error| format!("Could not read portable resource archive header: {error}"))?;
+    if &magic != PORTABLE_RESOURCE_ARCHIVE_MAGIC {
+        return Err("Portable resource archive has an invalid signature.".to_string());
+    }
+
+    let mut count_bytes = [0; 4];
+    archive
+        .read_exact(&mut count_bytes)
+        .map_err(|error| format!("Could not read portable resource count: {error}"))?;
+    let file_count = u32::from_le_bytes(count_bytes);
+    if file_count == 0 || file_count > 4096 {
+        return Err(format!("Invalid portable resource count: {file_count}."));
+    }
+
+    for index in 0..file_count {
+        let mut entry_header = [0; 10];
+        archive
+            .read_exact(&mut entry_header)
+            .map_err(|error| format!("Could not read portable resource entry {index}: {error}"))?;
+        let path_length = u16::from_le_bytes([entry_header[0], entry_header[1]]) as usize;
+        let file_length = u64::from_le_bytes(entry_header[2..10].try_into().unwrap());
+        if path_length == 0 || path_length > 4096 {
+            return Err(format!(
+                "Invalid path length for portable resource {index}."
+            ));
+        }
+
+        let mut path_bytes = vec![0; path_length];
+        archive
+            .read_exact(&mut path_bytes)
+            .map_err(|error| format!("Could not read portable resource path {index}: {error}"))?;
+        let relative_path = String::from_utf8(path_bytes)
+            .map_err(|error| format!("Portable resource path is not UTF-8: {error}"))?;
+        let relative_path = Path::new(&relative_path);
+        if relative_path.as_os_str().is_empty()
+            || relative_path.is_absolute()
+            || relative_path.to_string_lossy().contains(['\\', ':'])
+            || relative_path.to_string_lossy().ends_with('/')
+            || !relative_path
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)))
+        {
+            return Err("Portable resource archive contains an unsafe path.".to_string());
+        }
+
+        let output_path = destination.join(relative_path);
+        let parent = output_path.parent().ok_or_else(|| {
+            format!(
+                "Could not resolve parent directory for {}.",
+                output_path.display()
+            )
+        })?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Could not create portable resource directory {}: {error}",
+                parent.display()
+            )
+        })?;
+        let mut output_file = fs::File::create(&output_path).map_err(|error| {
+            format!(
+                "Could not create portable resource {}: {error}",
+                output_path.display()
+            )
+        })?;
+        let mut limited_archive = archive.by_ref().take(file_length);
+        let copied = std::io::copy(&mut limited_archive, &mut output_file).map_err(|error| {
+            format!(
+                "Could not extract portable resource {}: {error}",
+                output_path.display()
+            )
+        })?;
+        if copied != file_length {
+            return Err(format!(
+                "Portable resource {} is truncated.",
+                output_path.display()
+            ));
+        }
+    }
+
+    let mut trailing_byte = [0];
+    if archive
+        .read(&mut trailing_byte)
+        .map_err(|error| format!("Could not finish reading portable resource archive: {error}"))?
+        != 0
+    {
+        return Err("Portable resource archive contains unexpected trailing data.".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "portable")]
+fn portable_resources_directory(app: &AppHandle) -> Result<PathBuf, String> {
+    use flate2::read::GzDecoder;
+    use std::io::{Seek, SeekFrom};
+
+    static EXTRACTION_LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+    let _extraction_lock = EXTRACTION_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .map_err(|error| format!("Portable resource extraction lock is poisoned: {error}"))?;
+
+    let executable_path = env::current_exe()
+        .map_err(|error| format!("Could not resolve current executable path: {error}"))?;
+    let mut executable = fs::File::open(&executable_path).map_err(|error| {
+        format!(
+            "Could not open portable executable {}: {error}",
+            executable_path.display()
+        )
+    })?;
+    let (archive_start, archive_length, fingerprint) =
+        locate_portable_resource_archive(&mut executable)?;
+    let fingerprint = fingerprint
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let destination = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| format!("Could not resolve local app data directory: {error}"))?
+        .join("portable-resources");
+    let marker_path = destination.join(".complete");
+    let expected_marker = format!("portable-resource-v1:{fingerprint}");
+
+    if marker_path.is_file() {
+        match fs::read_to_string(&marker_path) {
+            Ok(marker) if marker == expected_marker => return Ok(destination),
+            Ok(_) => {}
+            Err(error) => {
+                return Err(format!(
+                    "Could not read portable resource marker {}: {error}",
+                    marker_path.display()
+                ));
+            }
+        }
+    }
+    if destination.exists() {
+        fs::remove_dir_all(&destination).map_err(|error| {
+            format!(
+                "Could not remove incomplete portable resources at {}: {error}",
+                destination.display()
+            )
+        })?;
+    }
+    fs::create_dir_all(&destination).map_err(|error| {
+        format!(
+            "Could not create portable resource directory {}: {error}",
+            destination.display()
+        )
+    })?;
+
+    executable
+        .seek(SeekFrom::Start(archive_start))
+        .map_err(|error| format!("Could not seek to portable resource archive: {error}"))?;
+    let decoder = GzDecoder::new(executable.take(archive_length));
+    unpack_portable_resource_archive(decoder, &destination)?;
+    fs::write(&marker_path, expected_marker).map_err(|error| {
+        format!(
+            "Could not mark portable resources as complete at {}: {error}",
+            marker_path.display()
+        )
+    })?;
+    Ok(destination)
+}
+
+fn production_resource_directory(app: &AppHandle) -> Result<PathBuf, String> {
+    #[cfg(feature = "portable")]
+    {
+        portable_resources_directory(app)
+    }
+    #[cfg(not(feature = "portable"))]
+    {
+        app.path()
+            .resource_dir()
+            .map(|directory| {
+                directory
+                    .join("resources")
+                    .join("generated")
+                    .join("updater")
+            })
+            .map_err(|error| format!("Could not find application resources: {error}"))
+    }
+}
+
 #[tauri::command]
 fn start_install(
     app: AppHandle,
@@ -2160,13 +2395,13 @@ fn start_install(
             root.join("scripts").join("pty-host.cjs"),
         )
     } else {
-        let resources = app
-            .path()
-            .resource_dir()
-            .map_err(|error| format!("Could not find application resources: {error}"))?
-            .join("resources")
-            .join("generated")
-            .join("updater");
+        #[cfg(feature = "portable")]
+        emit_output(
+            &app,
+            "Распаковка встроенных ресурсов portable-сборки (при первом запуске операции).\n"
+                .to_string(),
+        );
+        let resources = production_resource_directory(&app)?;
         (
             resources.clone(),
             resources.join("node.exe"),
@@ -2303,8 +2538,10 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ManagerState, dev_startup_script, node_is_compatible, omniscience_executable_paths_in_root,
-        scan_installed_versions, shortcut_compatible_path, tauri_dev_config,
+        ManagerState, PORTABLE_RESOURCE_ARCHIVE_MAGIC, PORTABLE_RESOURCE_TRAILER_MAGIC,
+        dev_startup_script, locate_portable_resource_archive, node_is_compatible,
+        omniscience_executable_paths_in_root, scan_installed_versions, shortcut_compatible_path,
+        tauri_dev_config, unpack_portable_resource_archive,
     };
     use std::{
         fs,
@@ -2333,6 +2570,66 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn test_resource_archive(path: &str, contents: &[u8]) -> Vec<u8> {
+        let path = path.as_bytes();
+        let mut archive = PORTABLE_RESOURCE_ARCHIVE_MAGIC.to_vec();
+        archive.extend_from_slice(&1u32.to_le_bytes());
+        archive.extend_from_slice(&(path.len() as u16).to_le_bytes());
+        archive.extend_from_slice(&(contents.len() as u64).to_le_bytes());
+        archive.extend_from_slice(path);
+        archive.extend_from_slice(contents);
+        archive
+    }
+
+    #[test]
+    fn portable_executable_trailer_locates_appended_resource_archive() {
+        let payload = b"compressed resources";
+        let fingerprint = [42; 32];
+        let mut executable = b"MZ portable executable".to_vec();
+        let archive_start = executable.len() as u64;
+        executable.extend_from_slice(payload);
+        executable.extend_from_slice(PORTABLE_RESOURCE_TRAILER_MAGIC);
+        executable.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+        executable.extend_from_slice(&fingerprint);
+
+        let (actual_start, actual_length, actual_fingerprint) =
+            locate_portable_resource_archive(std::io::Cursor::new(executable)).unwrap();
+
+        assert_eq!(actual_start, archive_start);
+        assert_eq!(actual_length, payload.len() as u64);
+        assert_eq!(actual_fingerprint, fingerprint);
+    }
+
+    #[test]
+    fn portable_executable_trailer_rejects_missing_archive_marker() {
+        let error = locate_portable_resource_archive(std::io::Cursor::new([0; 48])).unwrap_err();
+        assert!(error.contains("invalid resource marker"));
+    }
+
+    #[test]
+    fn portable_resource_archive_extracts_nested_files() {
+        let root = TestRoot::new();
+        let archive = test_resource_archive("scripts/setup.ps1", b"Write-Output 'ready'");
+
+        unpack_portable_resource_archive(archive.as_slice(), &root.0).unwrap();
+
+        assert_eq!(
+            fs::read(root.0.join("scripts").join("setup.ps1")).unwrap(),
+            b"Write-Output 'ready'"
+        );
+    }
+
+    #[test]
+    fn portable_resource_archive_rejects_parent_paths() {
+        let root = TestRoot::new();
+        let archive = test_resource_archive("../outside.txt", b"not allowed");
+
+        let error = unpack_portable_resource_archive(archive.as_slice(), &root.0).unwrap_err();
+
+        assert!(error.contains("unsafe path"));
+        assert!(!root.0.parent().unwrap().join("outside.txt").exists());
     }
 
     #[test]

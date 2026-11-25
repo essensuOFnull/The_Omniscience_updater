@@ -9,9 +9,11 @@
     "test": "node --test scripts/*.test.cjs",
     "stage:resources": "node scripts/stage-tauri-resources.mjs",
     "check:resources": "node scripts/stage-tauri-resources.mjs --check",
+    "pack:portable-resources": "node scripts/pack-portable-resources.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "tauri:build:portable": "npm run stage:resources && npm run pack:portable-resources && tauri build --features portable --no-bundle && node scripts/copy-portable-exe.mjs"
   },
   "dependencies": {
     "@lydell/node-pty": "1.2.0-beta.18",
