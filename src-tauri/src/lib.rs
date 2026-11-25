@@ -1926,6 +1926,9 @@ fn dev_startup_script(project_directory: &Path) -> String {
         r#"$ErrorActionPreference = 'Stop'
 $logDirectory = Join-Path $env:LOCALAPPDATA 'Omniscience Updater'
 $logPath = Join-Path $logDirectory 'dev-startup.log'
+        $tauriConfigPath = Join-Path $logDirectory 'dev-tauri-config.json'
+        $tauriOutputPath = Join-Path $logDirectory 'dev-tauri.stdout.log'
+        $tauriErrorPath = Join-Path $logDirectory 'dev-tauri.stderr.log'
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 Start-Transcript -Path $logPath -Append | Out-Null
 try {{
@@ -1954,16 +1957,52 @@ try {{
     }}
     $cargoDirectory = Join-Path $env:USERPROFILE '.cargo\bin'
     $env:PATH = "$nodeDirectory;$cargoDirectory;$env:PATH"
+    $env:CARGO_BUILD_JOBS = '1'
+    $env:CARGO_INCREMENTAL = '0'
+    $env:CARGO_TERM_COLOR = 'never'
+    $env:CARGO_TERM_PROGRESS_WHEN = 'never'
     Set-Location -LiteralPath $projectDirectory
 
+    Write-Output '[startup] Installing npm dependencies.'
     & $node $npmCli install --no-audit --no-fund
     if ($LASTEXITCODE -ne 0) {{
         throw "npm install failed with exit code $LASTEXITCODE"
     }}
-    & $node $npmCli run tauri -- dev
-    if ($LASTEXITCODE -ne 0) {{
-        throw "Tauri Dev exited with code $LASTEXITCODE"
+
+    $tauriCli = Join-Path $projectDirectory 'node_modules\@tauri-apps\cli\tauri.js'
+    if (-not (Test-Path -LiteralPath $tauriCli -PathType Leaf)) {{
+        throw "Tauri CLI was not found at $tauriCli"
     }}
+    $portListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $portListener.Start()
+    $port = $portListener.LocalEndpoint.Port
+    $portListener.Stop()
+    $tauriConfig = @{{
+        build = @{{
+            devUrl = "http://127.0.0.1:$port"
+            beforeDevCommand = "npm run build:project && npm run preview -- --host 127.0.0.1 --port $port --strictPort"
+        }}
+    }} | ConvertTo-Json -Depth 4 -Compress
+    [System.IO.File]::WriteAllText(
+        $tauriConfigPath,
+        $tauriConfig,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    Remove-Item Env:\TAURI_CONFIG -ErrorAction SilentlyContinue
+
+    Write-Output "[startup] Starting Omniscience Dev on port $port."
+    Write-Output "[startup] Tauri logs: $tauriOutputPath and $tauriErrorPath"
+    Remove-Item -LiteralPath $tauriOutputPath, $tauriErrorPath -Force -ErrorAction SilentlyContinue
+    $tauriArguments = '"{{0}}" dev --config "{{1}}"' -f $tauriCli, $tauriConfigPath
+    $tauriProcess = Start-Process `
+        -FilePath $node `
+        -ArgumentList $tauriArguments `
+        -WorkingDirectory $projectDirectory `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $tauriOutputPath `
+        -RedirectStandardError $tauriErrorPath `
+        -PassThru
+    Write-Output "[startup] Tauri CLI launched as PID $($tauriProcess.Id); inspect its log files for the result."
 }} catch {{
     Write-Error $_
     exit 1
@@ -2367,10 +2406,23 @@ mod tests {
     }
 
     #[test]
-    fn dev_startup_script_uses_tauri_wrapper_and_escapes_paths() {
+    fn dev_startup_script_passes_dynamic_config_to_tauri_cli() {
         let script = dev_startup_script(Path::new(r"C:\Users\O'Brien\Omniscience"));
         assert!(script.contains("'C:\\Users\\O''Brien\\Omniscience'"));
-        assert!(script.contains("& $node $npmCli run tauri -- dev"));
+        assert!(script.contains("-FilePath $node"));
+        assert!(script.contains("-ArgumentList $tauriArguments"));
+        assert!(script.contains("-RedirectStandardOutput $tauriOutputPath"));
+        assert!(script.contains("-RedirectStandardError $tauriErrorPath"));
+        assert!(script.contains("Tauri CLI launched as PID"));
+        assert!(script.contains("System.Net.Sockets.TcpListener"));
+        assert!(script.contains("npm run preview -- --host 127.0.0.1 --port $port --strictPort"));
+        assert!(script.contains("$env:CARGO_BUILD_JOBS = '1'"));
+        assert!(script.contains("$env:CARGO_INCREMENTAL = '0'"));
+        assert!(script.contains("[System.IO.File]::WriteAllText("));
+        assert!(script.contains("[System.Text.UTF8Encoding]::new($false)"));
+        assert!(script.contains("[startup] Starting Omniscience Dev on port $port"));
+        assert!(script.contains("dev-tauri.stdout.log"));
+        assert!(script.contains("dev-tauri.stderr.log"));
         assert!(script.contains("dev-startup.log"));
     }
 
